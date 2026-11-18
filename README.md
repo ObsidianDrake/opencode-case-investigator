@@ -10,7 +10,7 @@
 
 ## 建置與執行
 
-在目標 Linux 發行版使用 Python 3.9.10。Makefile 預設使用 `/usr/local/python/3.9.10/bin/python3.9`。安裝位置不同時，可用 `PYTHON` 指向同版本的直譯器。建置、測試與啟動前會檢查直譯器和現有 venv 的版本。打包環境需要啟用 shared library 的 Python，以及 SQLite、SSL、ctypes。執行服務的帳號需要 Git、repository 唯讀權限與執行目錄讀取權限。
+在目標 Linux 發行版使用 Python 3.9.10。Makefile 預設使用 `/usr/local/python/3.9.10/bin/python3.9`。安裝位置不同時，可用 `PYTHON` 指向同版本的直譯器。建置、測試與啟動前會檢查直譯器和現有 venv 的版本。打包使用 PyInstaller 6.22.3，支援 Python 3.9.10 靜態連結且另外提供 shared library 的安裝方式。打包主機需有對應的 `libpython3.9.so.1.0`，並提供 SQLite、SSL 和 ctypes。若主機只有靜態庫 `libpython3.9.a`，可直接使用下方 GitHub Actions 建好的 RHEL 8 執行檔。執行服務的帳號需要 Git、repository 唯讀權限與執行目錄讀取權限。
 
 建置主機需提供 Node.js（20.19 以上的 20.x，或 22.12 以上）及 npm。`make frontend` 依 lockfile 安裝套件並執行 Vite。`make run`、`make test`、`make executable` 都會先建置前端。單檔執行檔已內含建置產物，可在未安裝 Node.js 的主機執行。開發約定見 [AGENTS.md](AGENTS.md)。
 
