@@ -138,6 +138,8 @@ def create_app(cfg=None):
                     db.execute("INSERT INTO service_settings VALUES ('session_key', ?)", (app.secret_key,))
                 else:
                     app.secret_key = key[0]
+            if "reasoning" not in {c[1] for c in db.execute("PRAGMA table_info(messages)")}:
+                db.execute("ALTER TABLE messages ADD COLUMN reasoning TEXT")
             if "session_title" not in {c[1] for c in db.execute("PRAGMA table_info(cases)")}:
                 db.execute("ALTER TABLE cases ADD COLUMN session_title TEXT")
 
@@ -381,9 +383,33 @@ def create_app(cfg=None):
 
     @route("/api/cases/<int:cid>/activity")
     def case_activity(cid):
-        case(cid)
+        row = case(cid)
         with turns_lock:
-            return jsonify(turn_id=active_turns.get(cid, {}).get("id"))
+            active = active_turns.get(cid)
+        if not active or request.args.get("reasoning") != "1":
+            return jsonify(turn_id=active["id"] if active else None)
+        update_reasoning(row, active)
+        with active["lock"]:
+            return jsonify(turn_id=active["id"], reasoning="\n\n".join(active["reasoning"].values()))
+
+    def update_reasoning(row, active):
+        try:
+            history = opencode("OpenCode read thinking case=%d" % row["id"],
+                               "/session/" + row["sid"] + "/message?" + urlencode({"directory": row["workspace"]}), timeout=3)
+            if isinstance(history, list):
+                with active["lock"]:
+                    for item in history:
+                        info = item.get("info", {})
+                        if info.get("parentID") == active["message_id"] and info.get("id"):
+                            value = reasoning_text(item)
+                            if len(value) > len(active["reasoning"].get(info["id"], "")):
+                                active["reasoning"][info["id"]] = value
+        except ServiceUnavailable:
+            pass
+
+    def reasoning_text(message):
+        return "\n\n".join(part["text"] for part in message.get("parts", [])
+                            if part.get("type") == "reasoning" and isinstance(part.get("text"), str))
 
     @route("/api/cases/<int:cid>/abort", methods=["POST"])
     def abort_turn(cid):
@@ -421,7 +447,7 @@ def create_app(cfg=None):
     @route("/api/cases/<int:cid>")
     def detail(cid):
         row = case(cid)
-        messages = [dict(m) for m in db().execute("SELECT id,author,body,image FROM messages WHERE cid=? ORDER BY id",(cid,))]
+        messages = [dict(m) for m in db().execute("SELECT id,author,body,image,reasoning FROM messages WHERE cid=? ORDER BY id",(cid,))]
         title = row["session_title"]
         if not title and any(m["author"] == "@agent" for m in messages):
             title = session_title(row)
@@ -452,14 +478,17 @@ def create_app(cfg=None):
                 path = save_turn_image(row["workspace"], messages)
                 parts.append({"type": "text", "text": "本回合附有圖片，請使用 read 工具開啟以下圖片檔案，再依據圖片內容回答。若讀取失敗，請說明原因。\n" + str(path)})
                 logger.info("Image ready for OpenCode read case=%d file=%s", cid, path.name)
-            payload = dict(agent="investigate-web", system=SYSTEM, parts=parts)
+            # Match the six-byte time prefix of OpenCode ascending message IDs.
+            timestamp = ((time.time_ns() // 1_000_000) << 12) & 0xffffffffffff
+            message_id = "msg_%012x%s" % (timestamp, uuid.uuid4().hex[:14])
+            payload = dict(messageID=message_id, agent="investigate-web", system=SYSTEM, parts=parts)
             model_name = current_model()
             if model_name:
                 provider, model_id = model_name.split("/", 1)
                 payload["model"] = {"providerID": provider, "modelID": model_id}
             logger.info("Waiting for OpenCode reply case=%d agent=investigate-web requested_model=%s",
                         cid, model_name or "<server default>")
-            active = dict(id=uuid.uuid4().hex, lock=threading.Lock(), stopped=False, finished=False)
+            active = dict(reasoning={}, message_id=message_id, id=uuid.uuid4().hex, lock=threading.Lock(), stopped=False, finished=False)
             if not turn_slots.acquire(blocking=False):
                 raise ServiceUnavailable("查案服務忙碌，請稍後重新取得回覆。")
             with turns_lock:
@@ -477,6 +506,8 @@ def create_app(cfg=None):
                     with active["lock"]:
                         if not active["stopped"]:
                             raise
+                if (result or {}).get("info", {}).get("id"):
+                    update_reasoning(row, active)
                 with active["lock"]:
                     active["finished"] = True
                     if active["stopped"]:
@@ -487,7 +518,12 @@ def create_app(cfg=None):
                         if result.get("info", {}).get("error") or not answer:
                             raise ServiceUnavailable("查案未取得完整回覆，可重新取得回覆。")
                     with db():
-                        db().execute("INSERT INTO messages(cid,author,body) VALUES(?,?,?)", (cid, "@agent", answer))
+                        final = reasoning_text(result or {})
+                        if final:
+                            active["reasoning"][(result.get("info") or {}).get("id", "final")] = final
+                        thinking = "\n\n".join(active["reasoning"].values())
+                        db().execute("INSERT INTO messages(cid,author,body,reasoning) VALUES(?,?,?,?)",
+                                     (cid, "@agent", answer, thinking))
             finally:
                 with turns_lock:
                     del active_turns[cid]

@@ -176,8 +176,13 @@ class ServiceTests(unittest.TestCase):
     @patch("app.remote")
     def test_stop_active_turn(self, remote, source):
         started, stopped = threading.Event(), threading.Event()
+        sent = {}
         def upstream(operation, url, *args, **kwargs):
+            if "/message?" in url and args[0] is None:
+                return [{"info": {"id": "old", "parentID": "previous"}, "parts": [{"type": "reasoning", "text": "old"}]},
+                        {"info": {"id": "current", "parentID": sent["id"]}, "parts": [{"type": "reasoning", "text": "checking logs"}]}]
             if "/message?" in url:
+                sent["id"] = args[0]["messageID"]
                 self.assertNotIn("model", args[0])
                 self.assertIsNone(kwargs["timeout"])
                 started.set()
@@ -194,6 +199,7 @@ class ServiceTests(unittest.TestCase):
         with ThreadPoolExecutor(1) as pool:
             turn = pool.submit(self.api, "POST", path + "/turn")
             self.assertTrue(started.wait(5))
+            self.assertEqual(self.api("GET", path + "/activity?reasoning=1").json["reasoning"], "checking logs")
             token = self.api("GET", path + "/activity").json
             self.assertEqual(self.api("POST", path + "/abort", data=dict(turn_id="stale")).status_code, 409)
             self.user(2)
@@ -203,6 +209,7 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual(turn.result().status_code, 204)
         detail = self.api("GET", path).json
         self.assertIsNone(detail["active_turn"])
+        self.assertEqual(detail["messages"][-1]["reasoning"], "checking logs")
         self.assertIn("終止", detail["messages"][-1]["body"])
 
     def test_refresh_repository_without_checkout(self):

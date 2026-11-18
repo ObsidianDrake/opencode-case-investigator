@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import Markdown from './Markdown';
 import MessageForm from './MessageForm';
 import ProgramIndex from './ProgramIndex';
 import scarecrow from '../assets/scarecrow.svg';
@@ -38,20 +39,34 @@ function Hero({ label, title, children }) {
   </div>;
 }
 
+function ThinkingText({ text }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!text) return null;
+  const tail = text.trimEnd().split('\n').slice(-3).join('\n').slice(-160);
+  return <div className="thinking-text">
+    <button type="button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+      {expanded ? '收合思考過程' : '展開完整思考過程'}
+    </button>
+    <div className={expanded ? 'thinking-full' : 'thinking-preview'}><Markdown text={expanded ? text : tail} /></div>
+  </div>;
+}
+
 function Thread({ thread, thinking, busy, retry, reply, refresh, onError }) {
   const log = useRef(null);
   useEffect(() => { log.current.scrollTop = log.current.scrollHeight; }, [thread]);
   const [activity, setActivity] = useState(thread.active_turn);
+  const [reasoning, setReasoning] = useState('');
   const [stopping, setStopping] = useState(false);
   useEffect(() => {
-    if (!thinking && !thread.active_turn) { setActivity(null); return; }
+    if (!thinking && !thread.active_turn) { setActivity(null); setReasoning(''); return; }
     let live = true;
     let timer;
     async function poll() {
       try {
-        const { turn_id } = await api('cases/' + thread.id + '/activity');
+        const { turn_id, reasoning: snapshot } = await api('cases/' + thread.id + '/activity?reasoning=1');
         if (live) {
           setActivity(turn_id);
+          setReasoning(snapshot || '');
           if (!turn_id && !thinking) { await refresh(); return; }
         }
       } catch (error) { if (live) onError(error.message); }
@@ -75,10 +90,11 @@ function Thread({ thread, thinking, busy, retry, reply, refresh, onError }) {
     </Hero>
     <div id="messages" ref={log} role="log" aria-label="案件對話紀錄">{thread.messages.map(m =>
       <div key={m.id} className={'message ' + (m.author === '@agent' ? 'agent' : 'human')}>
-        <strong>{m.author === '@agent' ? '查案助理' : m.author}</strong><p>{m.body}</p>
+        <strong>{m.author === '@agent' ? '查案助理' : m.author}</strong><ThinkingText text={m.reasoning} />{m.author === '@agent' ? <div className="message-body"><Markdown text={m.body} /></div> : <p className="message-body">{m.body}</p>}
         {m.image && <img src={m.image} alt="案件附件" />}
       </div>)}</div>
     {(thinking || activity) && <div id="thinking" role="status"><img src={scarecrow} width="34" height="34" alt="" />查案助手正在調查… <button type="button" disabled={!activity || stopping} onClick={stop}>{stopping ? '正在終止…' : '終止查案'}</button></div>}
+    {(thinking || activity) && <ThinkingText key={activity} text={reasoning} />}
     {pending
       ? <button id="retry" disabled={busy || !!activity} onClick={retry}>重新取得回覆</button>
       : <MessageForm busy={busy} onSend={reply} onError={onError} />}

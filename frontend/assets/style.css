@@ -55,10 +55,10 @@ h1 { margin: 6px 0; font: 800 clamp(27px, 3vw, 42px)/1.22 var(--serif); letter-s
 .hero, #reply { flex: none; }
 #messages { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 20px; overflow: auto; padding: 20px 4px; scrollbar-color: #b7a88c transparent; }
 .message { max-width: 88%; min-width: 0; }
-.message strong { display: block; margin: 0 4px 5px; color: var(--muted); font-size: 13px; }
-.message p { margin: 0; padding: 12px 16px; white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--line); border-radius: 3px 12px 12px; background: var(--sheet); }
-.message.agent strong { color: var(--brick); }
-.message.agent strong::before { content: ""; display: inline-block; vertical-align: middle; width: 25px; height: 25px; margin-right: 7px; background: url(scarecrow.svg) center/contain no-repeat; }
+.message > strong { display: block; margin: 0 4px 5px; color: var(--muted); font-size: 13px; }
+.message > .message-body { margin: 0; padding: 12px 16px; white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--line); border-radius: 3px 12px 12px; background: var(--sheet); }
+.message.agent > strong { color: var(--brick); }
+.message.agent > strong::before { content: ""; display: inline-block; vertical-align: middle; width: 25px; height: 25px; margin-right: 7px; background: url(scarecrow.svg) center/contain no-repeat; }
 #thinking {
   display: flex;
   align-items: center;
@@ -260,3 +260,25 @@ body:has(#login:not([hidden])) header {
   .login-intro { margin: 16px 0 22px; }
   .login-button { width: 100%; }
 }
+
+.thinking-text { flex: none; min-width: 0; padding: 6px 12px; border-left: 2px solid var(--line); color: var(--muted); }
+.thinking-text button { padding: 3px 0; background: transparent; border: 0; font-weight: 650; }
+.thinking-full, .thinking-preview { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.45; }
+.thinking-full { max-height: min(28vh, 240px); overflow: auto; }
+.thinking-preview { max-height: 4.35em; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
+
+.markdown { white-space: normal; overflow-wrap: anywhere; line-height: 1.55; }
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+.markdown :is(h1,h2,h3,h4,h5,h6) { margin: .9em 0 .3em; font: 700 1.08em/1.35 var(--serif); }
+.markdown h1 { font-size: 1.35em; }
+.markdown h2 { font-size: 1.2em; }
+.markdown :is(p,ul,ol,pre,blockquote,table) { margin: .55em 0; }
+.markdown :is(ul,ol) { padding-inline-start: 1.6em; }
+.markdown code { font: .92em var(--mono); background: #eee6d6; padding: .1em .25em; border-radius: 3px; }
+.markdown pre { overflow-x: auto; padding: .7em; background: #eee6d6; border-radius: 4px; }
+.markdown pre code { padding: 0; white-space: pre; }
+.markdown blockquote { padding-left: .8em; border-left: 3px solid var(--line); color: var(--muted); }
+.markdown table { display: block; overflow-x: auto; border-collapse: collapse; }
+.markdown :is(th,td) { border: 1px solid var(--line); padding: .25em .55em; }
+.markdown a { color: var(--brick); text-decoration: underline; }
