@@ -44,5 +44,5 @@ make executable
 1. 管理員在「管理程式索引」建立程式、owner/repository、main 或 master，以及可選的入口檔。同步使用服務帳號預設的 Git credential helper。
 2. 開案時，服務先檢查執行位置在允許的目錄內，且可讀取與進入，再以 Git fetch 更新指定分支。每案記錄當時 commit。未填入口檔時，依程式檔名在對應 repository 內找唯一符合的檔案。
 3. 案件擷取執行位置第一層最多六個 log、err、out 檔，各取末尾 6000 bytes。程式入口最多擷取前 32000 bytes。另將常見程式碼檔案匯出為文字快照，最多 256 個檔案、總計 8 MB，排除隱藏路徑、符號連結及超過 256 KB 的檔案。
-4. 每案有獨立 OpenCode session，服務只開放 read、glob、grep。部署時使用專用且受限的 OpenCode 作業系統帳號，僅授予案件快照所需的讀取權限。模型和 provider 憑證由 OpenCode 自己管理。圖片分析需要支援影像輸入的模型。
+4. 每案有獨立 OpenCode session。首次查案、使用者追問和管理員接手時，後端都指定 `investigate-web` agent。部署時須讓 OpenCode 從案件快照目錄也能載入這個 agent。案件 session 只開放 `read`、`glob`、`grep`，Bash 指令會直接被拒絕。部署時使用專用且受限的 OpenCode 作業系統帳號，僅授予案件快照所需的讀取權限。模型和 provider 憑證由 OpenCode 自己管理。圖片分析需要支援影像輸入的模型。
 5. 瀏覽器先儲存使用者訊息，再等待該回合回覆。服務使用本機檔案鎖避免同案並行送出。上游逾時後可重新取得回覆，若上游其實已完成，重試可能造成同一訊息再次送達。案件及附件保存在部署環境。此版以單機部署為目標。

@@ -294,7 +294,8 @@ def create_app(cfg=None):
             if messages["image"]:
                 url = messages["image"]
                 parts.append({"type":"file","mime":url[5:url.index(";")],"url":url})
-            result = opencode("/session/"+row["sid"]+"/message?"+urlencode({"directory":row["workspace"]}),dict(system=SYSTEM,parts=parts))
+            result = opencode("/session/"+row["sid"]+"/message?"+urlencode({"directory":row["workspace"]}),
+                              dict(agent="investigate-web", system=SYSTEM, parts=parts))
             answer = "\n".join(p["text"] for p in result.get("parts",[]) if p.get("type")=="text" and p.get("text"))
             if result.get("info",{}).get("error") or not answer:
                 raise ServiceUnavailable("查案未取得完整回覆，可重新取得回覆。")

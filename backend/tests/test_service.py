@@ -84,6 +84,7 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(create.status_code,201)
         cid = "cases/"+str(create.json["id"])
         self.assertEqual(self.api("POST",cid+"/turn").status_code,204)
+        self.assertEqual(remote.call_args_list[1].args[1]["agent"], "investigate-web")
         self.assertEqual(remote.call_args_list[1].args[1]["parts"][1]["mime"],"image/png")
         self.assertNotIn("title",remote.call_args_list[0].args[1])
         self.assertEqual(self.api("GET","cases").json[0]["session_title"],"輸入資料異常")
@@ -92,6 +93,7 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(self.api("GET",cid).status_code,404)
         self.user(2,True)
         self.assertEqual(self.api("POST",cid+"/turn",data=dict(text="補充")).status_code,204)
+        self.assertEqual(remote.call_args.args[1]["agent"], "investigate-web")
         messages = self.api("GET",cid).json["messages"]
         self.assertEqual([m["author"] for m in messages],["alice","@agent","bob","@agent"])
 
