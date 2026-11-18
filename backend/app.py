@@ -257,7 +257,7 @@ def create_app(cfg=None):
         folder, logs = run_evidence(request.form.get("folder", ""))
         workspace = Path(tempfile.mkdtemp(prefix="snapshot-",dir=state))
         try:
-            revision,source = source_context(state,base,mapping,program,workspace)
+            revision,source = source_context(state, base, mapping, program, workspace, token=env.get("GITEA_TOKEN"))
             evidence = "版本 "+revision+"\n程式碼\n"+source+"\n執行紀錄\n"+logs
             sid = opencode("/session?" + urlencode({"directory":str(workspace)}), {"permission":[
                 {"permission":"*","pattern":"*","action":"deny"},

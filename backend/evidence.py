@@ -58,11 +58,14 @@ def log_context(folder):
     return "\n".join(pieces)
 
 
-def git(directory, *args):
+def git(directory, *args, credential=None):
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+    if credential:
+        env["CASE_GIT_PASSWORD"] = credential
     try:
         return subprocess.run(["git", "-C", str(directory), *args], check=True,
                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                              timeout=90, env=dict(os.environ, GIT_TERMINAL_PROMPT="0")).stdout
+                              timeout=90, env=env).stdout
     except (OSError, subprocess.SubprocessError):
         raise ServiceUnavailable("無法同步或讀取來源版本，請確認 repository 和服務帳號權限。")
 
@@ -91,7 +94,7 @@ def snapshot_sources(cache, commit, workspace):
         count += 1
 
 
-def source_context(state, base, mapping, program, workspace=None):
+def source_context(state, base, mapping, program, workspace=None, *, token=None):
     repo, branch, entry = mapping
     cache = state / "repo-cache" / hashlib.sha256(repo.encode()).hexdigest()
     cache.mkdir(parents=True, exist_ok=True)
@@ -99,7 +102,16 @@ def source_context(state, base, mapping, program, workspace=None):
         fcntl.flock(lock, fcntl.LOCK_EX)
         if not (cache / "HEAD").exists():
             git(cache, "init", "--bare")
-        git(cache, "fetch", "--depth=1", base + "/" + repo + ".git", "refs/heads/" + branch)
+        url = base + "/" + repo + ".git"
+        options = []
+        if token:
+            if not url.startswith(("https://", "http://")):
+                raise BadRequest("使用 Gitea token 時，gitea.url 必須是 HTTP 或 HTTPS 網址。")
+            # Git calls helpers with get/store/erase. Only answer get, and scope it to this URL.
+            helper = """!f() { if test "$1" = get; then printf '%s\\n' 'username=oauth2' "password=$CASE_GIT_PASSWORD"; fi; }; f"""
+            options = ["-c", "credential.helper=", "-c", "credential." + url + ".helper=" + helper,
+                       "-c", "http.followRedirects=false"]
+        git(cache, *options, "fetch", "--depth=1", url, "refs/heads/" + branch, credential=token)
         commit = git(cache, "rev-parse", "FETCH_HEAD").decode().strip()
         if workspace is not None:
             snapshot_sources(cache, commit, workspace)

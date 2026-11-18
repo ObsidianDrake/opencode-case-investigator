@@ -8,6 +8,7 @@ server:
 
 gitea:
   url: "https://gitea.example.invalid"
+  token: ""  # 選填，用於讀取私有 repository 的 Gitea personal access token
   client_id: ""
   client_secret: ""
 

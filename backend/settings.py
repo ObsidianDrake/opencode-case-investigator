@@ -9,7 +9,7 @@ import yaml
 FIELDS = {
     "server": {"state_dir": "CASE_STATE", "public_origin": "PUBLIC_ORIGIN", "prefix": "CASE_PREFIX",
                "bind_host": "BIND_HOST", "port": "PORT", "session_secret": "SESSION_SECRET"},
-    "gitea": {"url": "GITEA_BASE", "client_id": "GITEA_CLIENT_ID", "client_secret": "GITEA_CLIENT_SECRET"},
+    "gitea": {"url": "GITEA_BASE", "token": "GITEA_TOKEN", "client_id": "GITEA_CLIENT_ID", "client_secret": "GITEA_CLIENT_SECRET"},
     "opencode": {"url": "OPENCODE_BASE", "username": "OPENCODE_SERVER_USERNAME",
                  "password": "OPENCODE_SERVER_PASSWORD"},
     "traefik": {"upstream": "TRAEFIK_UPSTREAM"},

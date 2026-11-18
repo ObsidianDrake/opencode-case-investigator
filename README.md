@@ -53,6 +53,7 @@ make run
 - **程式執行位置**由使用者在報案時填寫絕對路徑。後端以實際執行服務的帳號檢查目錄可讀、可進入；若權限不足，前端顯示權限錯誤並保留輸入，服務會在同步 Git 或呼叫 OpenCode 前停止。
 - **內部身分**依 LSF Dashboard 的 `access_policy.account_email_domains` 與 `excluded_account_prefixes` 判定。完整比對 Gitea email 網域，先排除 email 帳號部分以指定字串開頭者，兩者都忽略大小寫。例如網域設為 `example.invalid`、前綴設為 `y_` 時，`alice@example.invalid` 可登入，`Y_alice@example.invalid` 和 `alice@sub.example.invalid` 都會被拒絕。前綴針對 email 的 @ 左側。只有通過內部身分判定後才繼承 Gitea admin。
 - **Session 簽章**保護瀏覽器中本服務的登入 cookie。首次啟動會在 `server.state_dir` 下的 `cases.sqlite` 自動建立隨機金鑰，後續重啟沿用。此目錄及備份限服務帳號存取。既有部署若要繼續使用原金鑰，可將舊 `SESSION_SECRET` 放入選用欄位 `server.session_secret`。更新前簽發的 cookie 沒有 email 欄位，需重新登入一次；日後更新內部帳號規則並重啟，既有 session 在下次 API 請求也會套用新規則。
+- 私有 repository 請在部署用的 `config.yml` 填入 `gitea.token`。使用能讀取目標 repository 的服務帳號 personal access token。首次抓取與後續更新共用此 token；留空時沿用原本的 Git 認證方式。修改後重啟服務。
 - **Gitea 登入回呼**為 `server.public_origin` 加 `server.prefix` 加 `/auth/callback`。將完整回呼登錄到 Gitea OAuth 應用程式，並填入 `gitea.client_id`、`gitea.client_secret`。
 - **上游服務**在 `opencode.url` 填專用 OpenCode Server 的基底位址。若啟用 Basic Auth，設定 `opencode.password` 與選用的 `opencode.username`。後端與 OpenCode 需能以相同路徑讀取案件快照。
 
