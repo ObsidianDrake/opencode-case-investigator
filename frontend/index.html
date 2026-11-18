@@ -1,22 +1,13 @@
 <!doctype html>
-<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" type="image/svg+xml" href="assets/scarecrow.svg"><title>DRC查案助手</title><link rel="stylesheet" href="assets/style.css"><script src="assets/app.js" defer></script></head>
-<body><header><div class="brand"><img class="brandmark" src="assets/scarecrow.svg" alt=""><strong>DRC查案助手</strong></div><span class="login-access" hidden><i aria-hidden="true"></i>內部使用</span><span class="account" id="account"></span><button id="logout" hidden>登出</button></header>
-<main><p id="status" role="status"></p><section id="login" aria-labelledby="login-title" hidden>
-  <div class="login-stage">
-    <div class="login-copy">
-      <p class="login-label"><span aria-hidden="true"></span>AI 查案助手</p>
-      <h1 id="login-title">城堡還在走，<br><em>哪裡鬆了？</em></h1>
-      <p class="login-intro">程式跑起來怪怪的？描述你看到的現象，或貼上截圖。查案助手會陪你循著線索，一步步找出原因。</p>
-      <a class="login-button" href="auth/login">使用 Gitea 登入<span aria-hidden="true">→</span></a>
-    </div>
-    <div class="login-art" role="img" aria-label="拼著鐵板與老屋的移動城堡正邁步穿過草地，路旁站著一個小稻草人。"></div>
-  </div>
-</section>
-<div id="workspace" hidden><aside><button id="new">＋ 建立案件</button><input id="case-search" type="search" aria-label="搜尋案件對話" placeholder="搜尋程式名稱或對話標題"><h2>案件對話</h2><nav id="cases"></nav><p id="no-matches" role="status" hidden>沒有符合的案件</p><button id="manage" hidden>管理程式索引</button></aside>
-<article><section id="intake"><div class="hero"><div><span class="section-label">查案助理</span><h1>開始新的調查</h1></div><div class="castle-print" aria-hidden="true"></div></div><form id="report"><label>執行的程式 <small>必填</small><select name="program" required></select></label><label>程式執行位置 <small>必填</small><input name="folder" placeholder="執行程式時所在的資料夾" required></label><label for="description">遇到什麼狀況 <small>必填</small></label><div class="draft"><textarea id="description" name="text" required maxlength="16000" placeholder="描述你看到的現象，可在這裡直接貼上截圖…"></textarea><div class="draft-image" hidden><img alt="待送出的圖片"><span></span><button type="button" aria-label="移除圖片">移除</button></div></div><div class="tools"><label class="attach"><span aria-hidden="true">＋</span><span class="filename">附上圖片</span><input name="image" type="file" accept="image/png,image/jpeg"></label><button class="primary">開始調查 ↗</button></div></form></section>
-<section id="thread" hidden><div class="hero"><div><span class="section-label">案件對話</span><h1 id="title"></h1><p id="subtitle" hidden></p><p id="meta"></p></div><div class="castle-print" aria-hidden="true"></div></div><div id="messages" role="log" aria-label="案件對話紀錄"></div><div id="thinking" role="status" hidden>
-  <img src="assets/scarecrow.svg" width="34" height="34" alt="">
-  <span>查案助手正在調查…</span>
-</div><form id="reply"><div class="draft"><textarea name="text" aria-label="補充訊息" placeholder="補充訊息，或直接貼上截圖…" required maxlength="16000"></textarea><div class="draft-image" hidden><img alt="待送出的圖片"><span></span><button type="button" aria-label="移除圖片">移除</button></div></div><div class="tools"><label class="attach"><span aria-hidden="true">＋</span><span class="filename">附上圖片</span><input name="image" type="file" accept="image/png,image/jpeg"></label><button class="primary">送出 ↑</button></div></form><button id="retry" hidden>重新取得回覆</button></section>
-<section id="admin" hidden><div class="hero"><div><span class="section-label">管理員</span><h1>程式索引</h1></div><div class="castle-print" aria-hidden="true"></div></div><div id="programs"></div><form id="mapping"><label>程式名稱<input name="name" required></label><label>Gitea repository<input name="repo" placeholder="owner/repository" required></label><label>分支<select name="branch"><option>main</option><option>master</option></select></label><label>入口檔（選填）<input name="entry" placeholder="repository 內相對路徑"></label><button class="primary">儲存</button><button type="reset">清除</button></form></section>
-</article></div></main></body></html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" type="image/svg+xml" href="./assets/scarecrow.svg">
+    <title>DRC查案助手</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./src/main.jsx"></script>
+  </body>
+</html>

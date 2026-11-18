@@ -19,3 +19,5 @@ backend/dist/
 backend/*.spec
 frontend/dist/
 deploy/*.toml
+
+frontend/node_modules/

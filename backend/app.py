@@ -58,7 +58,7 @@ def create_app(cfg=None):
     if not all(Path(root).is_absolute() and Path(root) != Path("/") for root in roots):
         raise ValueError("RUN_ROOTS requires explicit absolute directories")
     callback = public + prefix + "/auth/callback"
-    assets = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1])) / "frontend"
+    assets = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1])) / "frontend" / "dist"
     app = Flask(__name__, static_folder=None)
     app.config.update(SECRET_KEY=env["SESSION_SECRET"], MAX_CONTENT_LENGTH=6*1024*1024,
                       SESSION_COOKIE_NAME="case_session", SESSION_COOKIE_PATH=prefix,

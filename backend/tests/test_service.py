@@ -1,4 +1,5 @@
 import io
+import re
 import subprocess
 import tempfile
 import unittest
@@ -38,8 +39,12 @@ class ServiceTests(unittest.TestCase):
 
     def test_routes_and_roles(self):
         self.assertEqual(self.client.get(self.prefix).status_code,302)
-        for p in ("/","/assets/app.js","/assets/style.css"):
-            with self.client.get(self.prefix+p) as response:
+        with self.client.get(self.prefix + "/") as page:
+            self.assertEqual(page.status_code, 200)
+            assets = re.findall(r'(?:href|src)="(\./assets/[^"]+)"', page.get_data(as_text=True))
+        self.assertTrue({".css", ".js", ".svg"}.issubset({Path(path).suffix for path in assets}))
+        for path in assets:
+            with self.client.get(self.prefix + "/" + path[2:]) as response:
                 self.assertEqual(response.status_code,200)
         self.assertEqual(self.api("GET","cases").status_code,401)
         self.mapping()

@@ -1,0 +1,21 @@
+# DRC 查案助手開發約定
+
+## 架構與交付
+
+- 前端使用 React 元件與 Vite，程式放在 `frontend/src/`。由 React state 管理表單、附件及案件狀態。保留繁體中文、移動城堡視覺，以及等待查案時跳動的稻草人。
+- 後端位於 `backend/`，使用 Python **3.9.10**、Flask、Waitress 和 SQLite。建置、測試、啟動與 PyInstaller 打包都透過根目錄 Makefile，Python 虛擬環境放在 `backend/venv/`。
+- Vite 產出 `frontend/dist/`。原始碼啟動與單檔執行檔均提供同一份產物。頁面、素材、API、OAuth callback 共用可設定的 Traefik `CASE_PREFIX`。請用多層子路徑驗證相對網址。
+- 公開 repository 只收程式與可公開的文件。公司網址、帳密、token、實際案件內容、repo 快取和本機設定留在部署環境。
+
+## 案件與權限
+
+- 登入走 Gitea OAuth，只開放符合 internal 規則的帳號。後端檢查案件歸屬與管理員身分。Gitea admin 可以接手使用者的對話，並新增、修改、刪除資料庫中的程式索引。
+- 初次報案必填執行的程式、程式**執行位置**與遇到的狀況。在建立 OpenCode session 前，由後端驗證執行位置的範圍及讀取、進入權限。報案及追問都支援附件和在文字欄位直接貼圖。
+- 開案時由後端更新索引對應的 Gitea main/master 分支，保留 commit。案件對話主標題用程式名稱，副標題用 OpenCode session title，搜尋支援這兩個欄位。
+- 每案一個 OpenCode session。首次訊息、追問、重試與管理員接手都明確指定 `investigate-web`。由 OpenCode 呼叫模型；web service 只提供調查結果。模型 API 與憑證由 OpenCode 管理。
+- 目前 web session 的 directory 是案件快照，工具僅開放 read、grep、glob。Agent 規格另有在使用者 run folder 的 .opencode-tmp/ 做簡單測試的設計；尚待整合。變更此邊界時需一併處理既有 session、目錄權限與 Bash ask 的互動。
+
+## 驗證
+
+- 使用 Python 3.9.10 執行 `make test`。前端或打包流程變更時，執行 `make executable` 並驗證執行檔能在指定子路徑載入 Vite 產物。
+- 涉及查案介面的變更，驗證登入、必填欄位、貼圖、案件搜尋、接續對話和管理介面。明確區分模擬上游的測試與公司環境的實際整合驗證。
