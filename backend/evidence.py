@@ -7,27 +7,24 @@ import stat
 import subprocess
 from pathlib import Path
 
-from werkzeug.exceptions import BadRequest, ServiceUnavailable
+from werkzeug.exceptions import BadRequest, Forbidden, ServiceUnavailable
 
 REPOSITORY = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*/[A-Za-z0-9_-][A-Za-z0-9_.-]*")
 PROGRAM = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.+-]{0,127}")
 
 
-def run_folder(raw, roots, login):
+def run_evidence(raw):
     if not raw or not Path(raw).is_absolute():
         raise BadRequest("請提供程式執行位置的絕對路徑。")
     try:
         folder = Path(raw).resolve(strict=True)
-        allowed = [Path(root.replace("{login}", login)).resolve() for root in roots]
-        if not any(folder.is_relative_to(root) for root in allowed):
-            raise BadRequest("執行位置不在帳號可調查的範圍內。")
-        if not folder.is_dir() or not os.access(folder, os.R_OK | os.X_OK):
-            raise OSError()
-        with os.scandir(folder) as entries:
-            next(entries, None)
-        return folder
-    except (OSError, RuntimeError):
-        raise BadRequest("服務無法讀取執行位置，請檢查路徑與權限。")
+        return folder, log_context(folder)
+    except PermissionError:
+        raise Forbidden("權限不足：查案服務帳號無法讀取或進入程式執行位置，請確認資料夾權限後再送出。") from None
+    except (FileNotFoundError, NotADirectoryError):
+        raise BadRequest("程式執行位置不存在或不是資料夾，請確認路徑後再送出。") from None
+    except (OSError, RuntimeError, ValueError):
+        raise BadRequest("無法存取程式執行位置，請確認資料夾路徑與權限。") from None
 
 
 def log_context(folder):
@@ -37,6 +34,8 @@ def log_context(folder):
     try:
         if Path(os.readlink("/proc/self/fd/%d" % fd)) != folder:
             raise BadRequest("執行位置已變更，請重新選取。")
+        # Looking up "." also checks search (execute) access on an empty directory.
+        os.stat(".", dir_fd=fd)
         with os.scandir(fd) as entries:
             for entry in entries:
                 if not entry.name.lower().endswith((".log", ".err", ".out")):

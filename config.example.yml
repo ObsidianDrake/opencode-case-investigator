@@ -1,0 +1,26 @@
+# 複製為 config.yml，再填入部署值。實際設定檔由 Git 忽略。
+server:
+  public_origin: "https://portal.example.invalid"  # 瀏覽器使用的協定與主機，可含 port
+  prefix: "/case-investigator"
+  bind_host: "127.0.0.1"
+  port: 8000
+  state_dir: "/var/lib/case-investigator"         # 案件、快照、Git 快取及 session 簽章金鑰
+
+gitea:
+  url: "https://gitea.example.invalid"
+  client_id: ""
+  client_secret: ""
+
+access_policy:
+  account_email_domains:         # 精確比對 @ 右側，忽略大小寫
+    - "example.invalid"
+  excluded_account_prefixes:     # 比對 @ 左側的開頭，優先排除。無排除規則時填 []
+    - "y_"
+
+opencode:
+  url: "http://127.0.0.1:4096"   # OpenCode Server
+  # username: "opencode"          # 啟用 Basic Auth 時填入
+  # password: ""
+
+traefik:
+  upstream: "http://127.0.0.1:8000"  # 從 Traefik 主機看到的服務位址

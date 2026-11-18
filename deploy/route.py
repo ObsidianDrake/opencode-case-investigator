@@ -1,11 +1,23 @@
 """Render Traefik file-provider configuration using deployment settings."""
 import json
-import os
+import argparse
+import sys
+from pathlib import Path
 import re
 from urllib.parse import urlsplit
 
-prefix = os.environ.get("CASE_PREFIX", "/case-investigator")
-upstream = os.environ["TRAEFIK_UPSTREAM"]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+from settings import load_settings
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--config", help="Path to config.yml (default: current directory)")
+try:
+    settings = load_settings(parser.parse_args().config)
+except (ValueError, OSError) as error:
+    parser.exit(2, "Configuration error: %s\n" % error)
+
+prefix = settings.get("CASE_PREFIX", "/case-investigator")
+upstream = settings.get("TRAEFIK_UPSTREAM", "")
 if not re.fullmatch(r"(/[A-Za-z0-9_-]+)+", prefix):
     raise SystemExit("Invalid CASE_PREFIX")
 if urlsplit(upstream).scheme not in ("http", "https") or not urlsplit(upstream).netloc:

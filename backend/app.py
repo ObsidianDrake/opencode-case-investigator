@@ -17,9 +17,11 @@ from urllib.request import Request, urlopen
 from flask import Flask, abort, g, jsonify, redirect, request, send_from_directory, session
 from werkzeug.exceptions import HTTPException, ServiceUnavailable
 
-from evidence import PROGRAM, REPOSITORY, log_context, run_folder, source_context
+from settings import internal_email, load_settings
+from evidence import PROGRAM, REPOSITORY, run_evidence, source_context
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS service_settings(name TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS programs(name TEXT PRIMARY KEY, repo TEXT, branch TEXT, entry TEXT);
 CREATE TABLE IF NOT EXISTS cases(id INTEGER PRIMARY KEY, owner INTEGER, author TEXT, program TEXT,
     folder TEXT, summary TEXT, revision TEXT, sid TEXT, evidence TEXT, workspace TEXT);
@@ -46,7 +48,20 @@ def remote(url, data=None, headers=None, form=False, timeout=150):
 
 
 def create_app(cfg=None):
-    env = dict(os.environ) if cfg is None else cfg
+    env = load_settings() if cfg is None else cfg
+    required = {"CASE_STATE": "server.state_dir", "PUBLIC_ORIGIN": "server.public_origin",
+                "GITEA_BASE": "gitea.url", "GITEA_CLIENT_ID": "gitea.client_id",
+                "GITEA_CLIENT_SECRET": "gitea.client_secret",
+                "INTERNAL_DOMAINS": "access_policy.account_email_domains", "OPENCODE_BASE": "opencode.url"}
+    for name, field in required.items():
+        if not env.get(name):
+            raise ValueError("Missing configuration: " + field)
+    def values(name, separator, default):
+        raw = env.get(name, default)
+        return raw.split(separator) if isinstance(raw, str) else raw
+
+    domains = {item.strip().lower() for item in values("INTERNAL_DOMAINS", ",", []) if item.strip()}
+    excluded = tuple(item.strip().lower() for item in values("EXCLUDED_PREFIXES", ",", "y_") if item.strip())
     state = Path(env["CASE_STATE"]).resolve()
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
     prefix = env.get("CASE_PREFIX", "/case-investigator")
@@ -54,13 +69,10 @@ def create_app(cfg=None):
         raise ValueError("Invalid CASE_PREFIX")
     base = env["GITEA_BASE"].rstrip("/")
     public = env["PUBLIC_ORIGIN"].rstrip("/")
-    roots = env["RUN_ROOTS"].split(os.pathsep)
-    if not all(Path(root).is_absolute() and Path(root) != Path("/") for root in roots):
-        raise ValueError("RUN_ROOTS requires explicit absolute directories")
     callback = public + prefix + "/auth/callback"
     assets = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1])) / "frontend" / "dist"
     app = Flask(__name__, static_folder=None)
-    app.config.update(SECRET_KEY=env["SESSION_SECRET"], MAX_CONTENT_LENGTH=6*1024*1024,
+    app.config.update(MAX_CONTENT_LENGTH=6*1024*1024,
                       SESSION_COOKIE_NAME="case_session", SESSION_COOKIE_PATH=prefix,
                       SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=urlsplit(public).scheme=="https",
                       PERMANENT_SESSION_LIFETIME=3600)
@@ -68,6 +80,14 @@ def create_app(cfg=None):
         db.executescript(SCHEMA)
         with db:
             db.execute("BEGIN IMMEDIATE")
+            app.secret_key = env.get("SESSION_SECRET")
+            if not app.secret_key:
+                key = db.execute("SELECT value FROM service_settings WHERE name='session_key'").fetchone()
+                if key is None:
+                    app.secret_key = secrets.token_hex(32)
+                    db.execute("INSERT INTO service_settings VALUES ('session_key', ?)", (app.secret_key,))
+                else:
+                    app.secret_key = key[0]
             if "session_title" not in {c[1] for c in db.execute("PRAGMA table_info(cases)")}:
                 db.execute("ALTER TABLE cases ADD COLUMN session_title TEXT")
 
@@ -126,14 +146,13 @@ def create_app(cfg=None):
             client_secret=env["GITEA_CLIENT_SECRET"], redirect_uri=callback), form=True)
         profile = remote(base + "/api/v1/user", headers={"Authorization":"Bearer " + token["access_token"]})
         login_name = profile["login"]
-        local, _, domain = (profile.get("email") or "").lower().rpartition("@")
-        domains = [x.strip().lower() for x in env["INTERNAL_DOMAINS"].split(",") if x.strip()]
-        excluded = tuple(x.strip().lower() for x in env.get("EXCLUDED_PREFIXES","y_").split(",") if x.strip())
-        if (not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]*",login_name) or not local or domain not in domains
-                or local.startswith(excluded) or login_name.lower().startswith(excluded)):
+        email = profile.get("email")
+        if (not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]*", login_name)
+                or not internal_email(email, domains, excluded)):
             abort(403, "此服務僅開放內部帳號。")
         session.clear()
         session.permanent = True
+        session["email"] = email
         session["user"] = dict(id=profile["id"], login=login_name, admin=profile.get("is_admin") is True)
         return redirect(prefix + "/")
 
@@ -141,6 +160,9 @@ def create_app(cfg=None):
     def guard():
         if request.path.startswith(prefix + "/api/"):
             if not session.get("user"):
+                abort(401)
+            if not internal_email(session.get("email"), domains, excluded):
+                session.clear()
                 abort(401)
             if request.method not in ("GET","HEAD") and request.headers.get("X-Case-Request") != "1":
                 abort(403)
@@ -229,14 +251,14 @@ def create_app(cfg=None):
                 (g.user["id"],g.user["admin"]))])
         body,image = content()
         program = request.form.get("program","")
-        folder = run_folder(request.form.get("folder",""),roots,g.user["login"])
         mapping = db().execute("SELECT repo,branch,entry FROM programs WHERE name=?",(program,)).fetchone()
         if not mapping:
             abort(400,"請先選取已登錄的程式。")
+        folder, logs = run_evidence(request.form.get("folder", ""))
         workspace = Path(tempfile.mkdtemp(prefix="snapshot-",dir=state))
         try:
             revision,source = source_context(state,base,mapping,program,workspace)
-            evidence = "版本 "+revision+"\n程式碼\n"+source+"\n執行紀錄\n"+log_context(folder)
+            evidence = "版本 "+revision+"\n程式碼\n"+source+"\n執行紀錄\n"+logs
             sid = opencode("/session?" + urlencode({"directory":str(workspace)}), {"permission":[
                 {"permission":"*","pattern":"*","action":"deny"},
                 *[{"permission":tool,"pattern":"*","action":"allow"} for tool in ("read","grep","glob")]]})["id"]

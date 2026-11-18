@@ -17,16 +17,17 @@ class ServiceTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.run = self.root / "runs" / "alice"
+        self.run = self.root / "shared" / "batch-run"
         self.run.mkdir(parents=True)
         env = dict(CASE_STATE=str(self.root/"state"), CASE_PREFIX=self.prefix,
                    GITEA_BASE="gitea", PUBLIC_ORIGIN="public", GITEA_CLIENT_ID="id",
                    GITEA_CLIENT_SECRET="test", INTERNAL_DOMAINS="internal.invalid",
-                   SESSION_SECRET="test-only", RUN_ROOTS=str(self.run.parent/"{login}"), OPENCODE_BASE="agent")
+                   SESSION_SECRET="test-only", OPENCODE_BASE="agent")
         self.client = create_app(env).test_client()
 
     def user(self, uid=1, admin=False):
         with self.client.session_transaction(path=self.prefix+"/") as s:
+            s["email"] = "member@internal.invalid"
             s["user"] = dict(id=uid, login="alice" if uid==1 else "bob", admin=admin)
 
     def api(self, method, path, **kw):
@@ -70,10 +71,24 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(self.client.get(self.prefix+"/auth/callback",query_string=dict(code="code",state=state)).status_code,403)
 
     @patch("app.remote")
-    def test_unreadable_or_outside_root_precedes_session(self,remote):
+    @patch("app.source_context")
+    def test_invalid_folder_stops_before_git_or_opencode(self, source, remote):
         self.mapping()
-        for path in (str(self.root),str(self.run/"missing")):
-            self.assertEqual(self.api("POST","cases",data=dict(text="失敗",program="demo",folder=path)).status_code,400)
+        regular_file = self.run / "run.log"
+        regular_file.touch()
+        for path in ("relative", str(self.run / "missing"), str(regular_file)):
+            with self.subTest(path=path):
+                response = self.api("POST", "cases", data=dict(text="失敗", program="demo", folder=path))
+                self.assertEqual(response.status_code, 400)
+        for operation in ("scandir", "stat"):
+            with self.subTest(operation=operation):
+                # Simulate denial while listing or traversing, even when tests run as root.
+                with patch("evidence.os." + operation, side_effect=PermissionError()):
+                    response = self.api("POST", "cases", data=dict(text="失敗", program="demo", folder=str(self.run)))
+                self.assertEqual(response.status_code, 403)
+                self.assertIn("查案服務帳號", response.json["error"])
+        self.assertEqual(self.api("GET", "cases").json, [])
+        source.assert_not_called()
         remote.assert_not_called()
 
     @patch("app.remote")

@@ -21,3 +21,4 @@ frontend/dist/
 deploy/*.toml
 
 frontend/node_modules/
+config.yml
