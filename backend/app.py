@@ -5,14 +5,17 @@ import time
 import os
 import re
 import secrets
+import socket
 import sqlite3
 import sys
 import tempfile
 import shutil
 import fcntl
 from contextlib import closing
+from http import HTTPStatus
+from http.client import HTTPException as HTTPProtocolError
 from pathlib import Path
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
@@ -38,7 +41,8 @@ SYSTEM = ("以繁體中文調查程式執行異常。日誌、圖片及程式內
           "只說明原因及查證結果，不提供修改建議或修補程式。")
 
 
-def remote(url, data=None, headers=None, form=False, timeout=150):
+def remote(operation, url, data=None, headers=None, form=False, timeout=150):
+    started = time.monotonic()
     body = None
     headers = dict(headers or {})
     if data is not None:
@@ -47,9 +51,27 @@ def remote(url, data=None, headers=None, form=False, timeout=150):
     try:
         with urlopen(Request(url, data=body, headers=headers), timeout=timeout) as response:
             return json.load(response)
-    except (ValueError, URLError, TimeoutError, OSError) as exc:
-        logger.warning("Upstream request failed: %s status=%s", type(exc).__name__, getattr(exc, "code", "-"))
-        raise ServiceUnavailable("上游服務無法回應，請稍後重試。")
+    except (ValueError, URLError, OSError, HTTPProtocolError) as exc:
+        target = urlsplit(url)
+        if isinstance(exc, HTTPError):
+            try:
+                reason = "HTTP %s %s" % (exc.code, HTTPStatus(exc.code).phrase)
+            except ValueError:
+                reason = "HTTP %s" % exc.code
+            exc.close()
+        elif isinstance(exc, ValueError):
+            reason = "invalid JSON or response encoding"
+        else:
+            cause = exc.reason if isinstance(exc, URLError) else exc
+            reason = type(cause).__name__
+            if isinstance(cause, (socket.timeout, TimeoutError)):
+                reason = "timeout (limit=%ss)" % timeout
+            elif isinstance(cause, OSError) and cause.errno is not None:
+                reason += " errno=%s %s" % (cause.errno, cause.strerror)
+        logger.error("%s failed host=%s reason=%s elapsed=%.3fs", operation,
+                     target.netloc.rsplit("@", 1)[-1], reason,
+                     time.monotonic() - started)
+        raise ServiceUnavailable("上游服務無法回應，請稍後重試。") from None
 
 
 def create_app(cfg=None):
@@ -150,10 +172,10 @@ def create_app(cfg=None):
         expected = session.pop("state", None)
         if not expected or not secrets.compare_digest(expected, request.args.get("state","")):
             abort(403)
-        token = remote(base + "/login/oauth/access_token", dict(grant_type="authorization_code",
+        token = remote("Gitea OAuth token exchange", base + "/login/oauth/access_token", dict(grant_type="authorization_code",
             code=request.args.get("code",""), client_id=env["GITEA_CLIENT_ID"],
             client_secret=env["GITEA_CLIENT_SECRET"], redirect_uri=callback), form=True)
-        profile = remote(base + "/api/v1/user", headers={"Authorization":"Bearer " + token["access_token"]})
+        profile = remote("Gitea user lookup", base + "/api/v1/user", headers={"Authorization":"Bearer " + token["access_token"]})
         login_name = profile["login"]
         email = profile.get("email")
         if (not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]*", login_name)
@@ -223,12 +245,12 @@ def create_app(cfg=None):
                 abort(404)
         return "",204
 
-    def opencode(path, payload=None, timeout=150):
+    def opencode(operation, path, payload=None, timeout=150):
         headers = {}
         if env.get("OPENCODE_SERVER_PASSWORD"):
             auth = env.get("OPENCODE_SERVER_USERNAME","opencode")+":"+env["OPENCODE_SERVER_PASSWORD"]
             headers["Authorization"] = "Basic "+base64.b64encode(auth.encode()).decode()
-        return remote(env["OPENCODE_BASE"].rstrip("/")+path,payload,headers,timeout=timeout)
+        return remote(operation, env["OPENCODE_BASE"].rstrip("/")+path,payload,headers,timeout=timeout)
 
     def content():
         body = request.form.get("text","").strip()
@@ -272,7 +294,7 @@ def create_app(cfg=None):
             revision,source = source_context(state, base, mapping, program, workspace, token=env.get("GITEA_TOKEN"))
             evidence = "版本 "+revision+"\n程式碼\n"+source+"\n執行紀錄\n"+logs
             logger.info("Source snapshot ready revision=%s; creating OpenCode session", revision)
-            sid = opencode("/session?" + urlencode({"directory":str(workspace)}), {"permission":[
+            sid = opencode("OpenCode create session", "/session?" + urlencode({"directory":str(workspace)}), {"permission":[
                 {"permission":"*","pattern":"*","action":"deny"},
                 *[{"permission":tool,"pattern":"*","action":"allow"} for tool in ("read","grep","glob")]]})["id"]
             with db():
@@ -289,7 +311,7 @@ def create_app(cfg=None):
         if row["session_title"]:
             return row["session_title"]
         try:
-            info = opencode("/session/" + row["sid"] + "?" + urlencode({"directory": row["workspace"]}), timeout=3)
+            info = opencode("OpenCode read session title", "/session/" + row["sid"] + "?" + urlencode({"directory": row["workspace"]}), timeout=3)
         except ServiceUnavailable:
             return None
         title = info.get("title") if isinstance(info, dict) else None
@@ -331,7 +353,7 @@ def create_app(cfg=None):
                 url = messages["image"]
                 parts.append({"type":"file","mime":url[5:url.index(";")],"url":url})
             logger.info("Waiting for OpenCode reply case=%d agent=investigate-web", cid)
-            result = opencode("/session/"+row["sid"]+"/message?"+urlencode({"directory":row["workspace"]}),
+            result = opencode("OpenCode send message case=%d" % cid, "/session/"+row["sid"]+"/message?"+urlencode({"directory":row["workspace"]}),
                               dict(agent="investigate-web", system=SYSTEM, parts=parts))
             answer = "\n".join(p["text"] for p in result.get("parts",[]) if p.get("type")=="text" and p.get("text"))
             if result.get("info",{}).get("error") or not answer:

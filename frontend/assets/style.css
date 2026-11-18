@@ -225,6 +225,22 @@ body:has(#login:not([hidden])) header {
   box-shadow: 2px 5px 0 #ddd1b5, 2px 6px 0 #beae8f, 0 14px 27px #674d2925;
   transform: rotate(1deg);
 }
+@media (min-width: 761px) {
+  #root:has(#login) { display: grid; }
+  #root:has(#login) > header,
+  #root:has(#login) > main { grid-area: 1 / 1; }
+  #root:has(#login) > header { align-self: start; z-index: 1; }
+  #login {
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding-block: 76px;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .login-art {
+    width: min(100%, calc((100dvh - 152px) * 1.5));
+    justify-self: center;
+  }
+}
 @media (max-width: 760px) {
   #login { padding: 26px 22px 36px; }
   .login-stage { max-width: 560px; grid-template-columns: 1fr; gap: 26px; }
