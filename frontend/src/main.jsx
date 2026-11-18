@@ -33,9 +33,9 @@ function Login() {
 }
 
 function Hero({ label, title, children }) {
-  return <div className="hero"><div>
+  return <div className="hero">
     <span className="section-label">{label}</span><h1>{title}</h1>{children}
-  </div><div className="castle-print" aria-hidden="true" /></div>;
+  </div>;
 }
 
 function Thread({ thread, thinking, busy, retry, reply, refresh, onError }) {
@@ -217,8 +217,12 @@ function App() {
           <strong>{c.program}</strong><span>{c.session_title}</span>
         </button>)}</nav>
         {filter && !visible.length && <p id="no-matches" role="status">沒有符合的案件</p>}
-        {user.admin && <button id="manage" disabled={busy} onClick={() => switchView('admin')}>管理程式索引</button>}
-        {user.admin && <button id="model-settings" disabled={busy} onClick={openModelSettings}>查案模型設定</button>}
+        {user.admin && <nav className="admin-nav" aria-label="管理功能">
+          <button id="manage" aria-current={view === 'admin'} disabled={busy}
+            onClick={() => switchView('admin')}>管理程式索引</button>
+          <button id="model-settings" aria-current={view === 'model'} disabled={busy}
+            onClick={openModelSettings}>查案模型設定</button>
+        </nav>}
       </aside><article>
         {view === 'model' && user.admin && <section>
           <Hero label="管理員" title="查案模型設定" />

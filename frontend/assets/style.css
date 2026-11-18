@@ -40,16 +40,15 @@ nav button { display: grid; gap: 4px; width: 100%; text-align: left; margin: 0 0
 nav button[aria-current=true] { background: var(--sheet); border-color: #c9b79b; box-shadow: inset 3px 0 var(--brick), 0 2px 3px #78694e12; }
 nav strong { font: 650 14px var(--mono); overflow-wrap: anywhere; }
 nav span { color: var(--muted); font-size: 13px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-#manage { margin-top: auto; text-align: left; }
+.admin-nav { display: grid; gap: 2px; flex: none; max-height: none; margin-top: auto; padding-top: 8px; border-top: 1px solid var(--line); }
+.admin-nav button { margin: 0; font-weight: 600; }
 #no-matches { font-size: 14px; color: var(--muted); margin: 0 4px; }
 article { --gutter: clamp(16px, 2.6vw, 40px); min-width: 0; padding: var(--gutter); background: radial-gradient(#9c866326 .7px, transparent .9px) 0 0/5px 5px, var(--paper); }
 article > section { width: min(100%, 1040px); margin: auto; }
-.hero { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 122px; padding: 18px clamp(18px, 2.5vw, 36px); border-block: 1px solid #b9a787; background: #faf4e4; }
-.hero > div:first-child { min-width: 0; }
+.hero { padding: 10px clamp(18px, 2.5vw, 36px); border-block: 1px solid #b9a787; background: #faf4e4; }
 .section-label { display: flex; align-items: center; gap: 10px; color: var(--brick); font-weight: 700; font-size: 13px; letter-spacing: .12em; }
 .section-label::before { content: ""; width: 26px; height: 5px; border-block: 1px solid; transform: skewX(-25deg); }
 h1 { margin: 6px 0; font: 800 clamp(27px, 3vw, 42px)/1.22 var(--serif); letter-spacing: -.035em; overflow-wrap: anywhere; }
-.castle-print { width: clamp(90px, 13vw, 160px); flex: none; aspect-ratio: 1.5; border: 4px solid #fffaf0; outline: 1px solid #c5b997; box-shadow: 1px 3px 0 #ddd1b5; transform: rotate(2deg); background: url(walking-castle.webp) center/cover no-repeat; }
 #subtitle { margin: 2px 0; font-weight: 600; color: #5c4737; overflow-wrap: anywhere; }
 #meta { margin: 5px 0 0; }
 #thread { display: flex; flex-direction: column; height: calc(100dvh - 64px - 2 * var(--gutter)); min-height: 540px; }
@@ -128,14 +127,12 @@ small { margin-left: 4px; font-weight: 500; font-size: 12px; color: var(--brick)
   #root:has(#workspace) > header { position: sticky; top: 0; z-index: 1; }
   #workspace { grid-template-columns: minmax(0,1fr); }
   aside { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; padding: 14px 16px; border-right: 0; border-bottom: 1px solid var(--line); }
-  #manage { grid-column: 2; grid-row: 1; margin: 0; }
-  #model-settings { grid-column: 1/-1; }
+  .admin-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   #case-search, aside h2, nav, #no-matches { grid-column: 1/-1; }
   aside h2 { margin: 3px 0; }
   nav { max-height: 112px; }
   nav button { padding: 5px 10px; }
-  .castle-print { width: clamp(56px, 15vw, 90px); }
-  .hero { min-height: 90px; padding: 14px; gap: 10px; }
+  .hero { padding: 8px 14px; }
   #thread { height: auto; min-height: 0; }
   #messages { max-height: 54vh; min-height: 150px; flex: auto; }
   .message { max-width: 95%; }
