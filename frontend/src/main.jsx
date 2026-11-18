@@ -3,7 +3,8 @@ import { createRoot } from 'react-dom/client';
 import Markdown from './Markdown';
 import MessageForm from './MessageForm';
 import ProgramIndex from './ProgramIndex';
-import scarecrow from '../assets/scarecrow.svg';
+import scarecrow from '../assets/scarecrow.png';
+import hoppingScarecrow from '../assets/scarecrow-hop.gif';
 import '../assets/style.css';
 
 async function api(path, options = {}) {
@@ -93,7 +94,7 @@ function Thread({ thread, thinking, busy, retry, reply, refresh, onError }) {
         <strong>{m.author === '@agent' ? '查案助理' : m.author}</strong><ThinkingText text={m.reasoning} />{m.author === '@agent' ? <div className="message-body"><Markdown text={m.body} /></div> : <p className="message-body">{m.body}</p>}
         {m.image && <img src={m.image} alt="案件附件" />}
       </div>)}</div>
-    {(thinking || activity) && <div id="thinking" role="status"><img src={scarecrow} width="34" height="34" alt="" />查案助手正在調查… <button type="button" disabled={!activity || stopping} onClick={stop}>{stopping ? '正在終止…' : '終止查案'}</button></div>}
+    {(thinking || activity) && <div id="thinking" role="status"><img src={hoppingScarecrow} width="56" height="56" alt="" />查案助手正在調查… <button type="button" disabled={!activity || stopping} onClick={stop}>{stopping ? '正在終止…' : '終止查案'}</button></div>}
     {(thinking || activity) && <ThinkingText key={activity} text={reasoning} />}
     {pending
       ? <button id="retry" disabled={busy || !!activity} onClick={retry}>重新取得回覆</button>

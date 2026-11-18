@@ -46,7 +46,7 @@ class ServiceTests(unittest.TestCase):
         with self.client.get(self.prefix + "/") as page:
             self.assertEqual(page.status_code, 200)
             assets = re.findall(r'(?:href|src)="(\./assets/[^"]+)"', page.get_data(as_text=True))
-        self.assertTrue({".css", ".js", ".svg"}.issubset({Path(path).suffix for path in assets}))
+        self.assertTrue({".css", ".js", ".png"}.issubset({Path(path).suffix for path in assets}))
         for path in assets:
             with self.client.get(self.prefix + "/" + path[2:]) as response:
                 self.assertEqual(response.status_code,200)
