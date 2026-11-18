@@ -1,0 +1,16 @@
+.env
+.env.*
+instance/
+local-config/
+secrets/
+cases/
+uploads/
+logs/
+repo-cache/
+*.log
+*.sqlite*
+*.db
+*.pem
+*.key
+venv/
+__pycache__/
