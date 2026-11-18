@@ -4,7 +4,7 @@ NPM ?= npm
 CONFIG ?=
 config_arg = $(if $(CONFIG),--config "$(CONFIG)")
 check_version = "$(1)" -c 'import platform, sys; actual = platform.python_version(); sys.exit(0 if actual == "3.9.10" else "Expected Python 3.9.10, found %s at %s" % (actual, sys.executable))'
-.PHONY: all check-python check-venv venv backend frontend executable test run route clean
+.PHONY: all check-python check-venv venv backend frontend executable package-backend test test-backend run route clean
 all: executable
 check-python:
 	@$(call check_version,$(PYTHON))
@@ -22,10 +22,12 @@ frontend/node_modules/.installed: frontend/package.json frontend/package-lock.js
 	touch $@
 frontend: frontend/node_modules/.installed
 	cd frontend && $(NPM) run build
-executable: frontend backend
+executable: frontend
+executable package-backend: backend
 	$(VENV) -m pip install 'pyinstaller==6.16.0'
 	cd backend && venv/bin/python -m PyInstaller --noconfirm --onefile --name case-investigator --add-data '../frontend/dist:frontend/dist' run_api.py
-test: backend frontend
+test: frontend
+test test-backend: backend
 	cd backend && venv/bin/python -m unittest discover -s tests -v
 run: backend frontend
 	$(VENV) backend/run_api.py $(config_arg)

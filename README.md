@@ -20,6 +20,23 @@ make test
 make executable
 ```
 
+### 從 GitHub Actions 下載 RHEL 8 執行檔
+
+推送到 `main`、推送 `v` 開頭的 tag，或手動點選 **Actions → Build RHEL 8 binary → Run workflow**，都會建置 x86_64 版本。流程在 AlmaLinux 8.10 使用 Python 3.9.10 執行後端測試與打包，再以一般使用者在 Red Hat UBI 8.10 啟動成品。首頁、前端 JavaScript 和登入前的 API 回應通過檢查後，成品會出現在該次執行的 **Artifacts**。
+
+下載並解開 `case-investigator-rhel8-x86_64` artifact 的 ZIP，在 RHEL 8 x86_64 主機執行以下指令。執行檔已包含 Python 與前端。服務帳號的環境需提供 Git，以供開案時更新 repository。
+
+```sh
+sha256sum -c case-investigator-rhel8-x86_64.tar.gz.sha256
+tar xzf case-investigator-rhel8-x86_64.tar.gz
+```
+
+首次部署請依下節建立 `config.yml`。若 Gitea 或 OpenCode 使用公司 HTTPS 憑證，請確認公司 CA 已加入 RHEL 的信任清單，並在啟動服務的環境設定 `SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt`。已有設定檔的部署可直接執行下列指令。
+
+```sh
+./case-investigator --config /path/to/config.yml
+```
+
 ## 部署設定
 
 在專案根目錄執行以下指令。將範例的主機、目錄、網域和 Gitea OAuth 憑證替換成部署環境的值。`config.yml` 已由 Git 忽略。

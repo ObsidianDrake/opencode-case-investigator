@@ -1,0 +1,78 @@
+name: Build RHEL 8 binary
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: RHEL 8 x86_64 · Python 3.9.10
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build React frontend
+        run: make frontend
+
+      - name: Download and verify CPython 3.9.10
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl --fail --location --retry 3 --output cpython.tar.gz \
+            'https://github.com/astral-sh/python-build-standalone/releases/download/20220227/cpython-3.9.10%2B20220227-x86_64-unknown-linux-gnu-install_only.tar.gz'
+          echo '455089cc576bd9a58db45e919d1fc867ecdbb0208067dffc845cc9bbf0701b70  cpython.tar.gz' | sha256sum --check
+
+      - name: Test and package in AlmaLinux 8.10
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "$GITHUB_WORKSPACE:/src" -w /src \
+            -v "$RUNNER_TEMP/cpython.tar.gz:/tmp/cpython.tar.gz:ro" \
+            almalinux:8.10 bash -euc '
+              dnf -y install git make binutils tar gzip
+              tar xzf /tmp/cpython.tar.gz -C /opt
+              export LD_LIBRARY_PATH=/opt/python/lib
+              make PYTHON=/opt/python/bin/python3.9 test-backend package-backend
+            '
+
+      - name: Archive binary and example configuration
+        run: |
+          mkdir -p "$RUNNER_TEMP/release"
+          archive=case-investigator-rhel8-x86_64.tar.gz
+          tar czf "$RUNNER_TEMP/release/$archive" \
+            -C "$GITHUB_WORKSPACE/backend/dist" case-investigator \
+            -C "$GITHUB_WORKSPACE" config.example.yml
+          cd "$RUNNER_TEMP/release"
+          sha256sum "$archive" > "$archive.sha256"
+
+      - name: Start packaged service in clean Red Hat UBI 8
+        run: |
+          cd "$RUNNER_TEMP/release"
+          archive=case-investigator-rhel8-x86_64.tar.gz
+          sha256sum --check "$archive.sha256"
+          mkdir "$RUNNER_TEMP/verify"
+          tar xzf "$archive" -C "$RUNNER_TEMP/verify"
+          docker run --rm --platform linux/amd64 --user 65534:65534 \
+            -v "$RUNNER_TEMP/verify:/release:ro" \
+            -v "$GITHUB_WORKSPACE/.github/workflows/smoke-rhel8.sh:/smoke.sh:ro" \
+            registry.access.redhat.com/ubi8/ubi:8.10 bash /smoke.sh
+
+      - name: Upload verified binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: case-investigator-rhel8-x86_64
+          path: ${{ runner.temp }}/release/
+          if-no-files-found: error
+          compression-level: 0
