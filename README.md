@@ -10,7 +10,7 @@
 
 ## 建置與執行
 
-在目標 Linux 發行版執行。預設 Python 為 3.9.10，可透過 make 的 PYTHON 變數指定直譯器。打包環境需要啟用 shared library 的 Python，以及 SQLite、SSL、ctypes。執行服務的帳號需要 Git、repository 唯讀權限與執行目錄讀取權限。
+在目標 Linux 發行版使用 Python 3.9.10。Makefile 預設使用 `/usr/local/python/3.9.10/bin/python3.9`。安裝位置不同時，可用 `PYTHON` 指向同版本的直譯器。建置、測試與啟動前會檢查直譯器和現有 venv 的版本。打包環境需要啟用 shared library 的 Python，以及 SQLite、SSL、ctypes。執行服務的帳號需要 Git、repository 唯讀權限與執行目錄讀取權限。
 
 ```sh
 make backend
