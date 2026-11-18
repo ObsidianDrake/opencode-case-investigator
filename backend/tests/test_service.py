@@ -2,6 +2,8 @@ import io
 import re
 import subprocess
 import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -116,6 +118,38 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(remote.call_args.args[2]["agent"], "investigate-web")
         messages = self.api("GET",cid).json["messages"]
         self.assertEqual([m["author"] for m in messages],["alice","@agent","bob","@agent"])
+
+    @patch("app.source_context", return_value=("revision", "source"))
+    @patch("app.remote")
+    def test_stop_active_turn(self, remote, source):
+        started, stopped = threading.Event(), threading.Event()
+        def upstream(operation, url, *args, **kwargs):
+            if "/message?" in url:
+                self.assertIsNone(kwargs["timeout"])
+                started.set()
+                self.assertTrue(stopped.wait(5))
+                return {"info": {"error": {"name": "MessageAbortedError"}}}
+            if "/abort?" in url:
+                stopped.set()
+                return True
+            return {"id": "session", "title": "test"}
+        remote.side_effect = upstream
+        self.mapping()
+        path = "cases/" + str(self.api("POST", "cases", data=dict(
+            text="test", program="demo", folder=str(self.run))).json["id"])
+        with ThreadPoolExecutor(1) as pool:
+            turn = pool.submit(self.api, "POST", path + "/turn")
+            self.assertTrue(started.wait(5))
+            token = self.api("GET", path + "/activity").json
+            self.assertEqual(self.api("POST", path + "/abort", data=dict(turn_id="stale")).status_code, 409)
+            self.user(2)
+            self.assertEqual(self.api("POST", path + "/abort", data=token).status_code, 404)
+            self.user(2, True)
+            self.assertEqual(self.api("POST", path + "/abort", data=token).status_code, 204)
+            self.assertEqual(turn.result().status_code, 204)
+        detail = self.api("GET", path).json
+        self.assertIsNone(detail["active_turn"])
+        self.assertIn("終止", detail["messages"][-1]["body"])
 
     def test_refresh_repository_without_checkout(self):
         repo = self.root/"repos"/"samples"/"demo.git"

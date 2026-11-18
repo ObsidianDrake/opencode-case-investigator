@@ -38,9 +38,35 @@ function Hero({ label, title, children }) {
   </div><div className="castle-print" aria-hidden="true" /></div>;
 }
 
-function Thread({ thread, thinking, busy, retry, reply, onError }) {
+function Thread({ thread, thinking, busy, retry, reply, refresh, onError }) {
   const log = useRef(null);
   useEffect(() => { log.current.scrollTop = log.current.scrollHeight; }, [thread]);
+  const [activity, setActivity] = useState(thread.active_turn);
+  const [stopping, setStopping] = useState(false);
+  useEffect(() => {
+    if (!thinking && !thread.active_turn) { setActivity(null); return; }
+    let live = true;
+    let timer;
+    async function poll() {
+      try {
+        const { turn_id } = await api('cases/' + thread.id + '/activity');
+        if (live) {
+          setActivity(turn_id);
+          if (!turn_id && !thinking) { await refresh(); return; }
+        }
+      } catch (error) { if (live) onError(error.message); }
+      if (live) timer = setTimeout(poll, 1500);
+    }
+    poll();
+    return () => { live = false; clearTimeout(timer); };
+  }, [thinking, thread.id, thread.active_turn]);
+  async function stop() {
+    setStopping(true);
+    try {
+      await api('cases/' + thread.id + '/abort', { method: 'POST', body: new URLSearchParams({ turn_id: activity }) });
+    } catch (error) { onError(error.message); }
+    finally { setStopping(false); }
+  }
   const pending = thread.messages.at(-1)?.author !== '@agent';
   return <section id="thread">
     <Hero label="案件對話" title={thread.program}>
@@ -52,9 +78,9 @@ function Thread({ thread, thinking, busy, retry, reply, onError }) {
         <strong>{m.author === '@agent' ? '查案助理' : m.author}</strong><p>{m.body}</p>
         {m.image && <img src={m.image} alt="案件附件" />}
       </div>)}</div>
-    {thinking && <div id="thinking" role="status"><img src={scarecrow} width="34" height="34" alt="" />查案助手正在調查…</div>}
+    {(thinking || activity) && <div id="thinking" role="status"><img src={scarecrow} width="34" height="34" alt="" />查案助手正在調查… <button type="button" disabled={!activity || stopping} onClick={stop}>{stopping ? '正在終止…' : '終止查案'}</button></div>}
     {pending
-      ? <button id="retry" disabled={busy} onClick={retry}>重新取得回覆</button>
+      ? <button id="retry" disabled={busy || !!activity} onClick={retry}>重新取得回覆</button>
       : <MessageForm busy={busy} onSend={reply} onError={onError} />}
   </section>;
 }
@@ -162,7 +188,7 @@ function App() {
           <MessageForm programs={programs} busy={busy} onSend={createCase} onError={setStatus} />
         </section>
         {view === 'thread' && thread && <Thread key={thread.id} thread={thread} thinking={thinking} busy={busy}
-          retry={() => act(() => turn(thread.id))} reply={data => act(() => turn(thread.id, data))} onError={setStatus} />}
+          refresh={() => openCase(thread.id)} retry={() => act(() => turn(thread.id))} reply={data => act(() => turn(thread.id, data))} onError={setStatus} />}
         {view === 'admin' && user.admin && <section id="admin"><Hero label="管理員" title="程式索引" />
           <ProgramIndex programs={programs} busy={busy}
             save={(name, values) => changeProgram(name, { method: name ? 'PUT' : 'POST',

@@ -8,6 +8,8 @@ import secrets
 import socket
 import sqlite3
 import sys
+import threading
+import uuid
 import tempfile
 import shutil
 import fcntl
@@ -307,6 +309,36 @@ def create_app(cfg=None):
         logger.info("Case created case=%d program=%s", cid, program)
         return jsonify(id=cid),201
 
+    # Waitress serves one process. Leave worker capacity for abort and status requests.
+    turn_slots = threading.BoundedSemaphore(10)
+    turns_lock = threading.Lock()
+    active_turns = {}
+
+    @route("/api/cases/<int:cid>/activity")
+    def case_activity(cid):
+        case(cid)
+        with turns_lock:
+            return jsonify(turn_id=active_turns.get(cid, {}).get("id"))
+
+    @route("/api/cases/<int:cid>/abort", methods=["POST"])
+    def abort_turn(cid):
+        row = case(cid)
+        turn_id = request.form.get("turn_id")
+        with turns_lock:
+            active = active_turns.get(cid)
+        if not active or active["id"] != turn_id:
+            abort(409, "此回合已結束，請重新整理案件。")
+        with active["lock"]:
+            if active["finished"]:
+                abort(409, "此回合已結束。")
+            if not active["stopped"]:
+                path = "/session/" + row["sid"] + "/abort?" + urlencode({"directory": row["workspace"]})
+                if opencode("OpenCode abort case=%d" % cid, path, {}, timeout=15) is not True:
+                    raise ServiceUnavailable("OpenCode 未確認終止，請再試一次。")
+                active["stopped"] = True
+                logger.info("OpenCode abort acknowledged case=%d", cid)
+        return "", 204
+
     def session_title(row):
         if row["session_title"]:
             return row["session_title"]
@@ -328,7 +360,9 @@ def create_app(cfg=None):
         title = row["session_title"]
         if not title and any(m["author"] == "@agent" for m in messages):
             title = session_title(row)
-        return jsonify(program=row["program"],session_title=title,folder=row["folder"],revision=row["revision"],messages=messages)
+        with turns_lock:
+            turn_id = active_turns.get(cid, {}).get("id")
+        return jsonify(active_turn=turn_id,program=row["program"],session_title=title,folder=row["folder"],revision=row["revision"],messages=messages)
 
     @route("/api/cases/<int:cid>/turn",methods=["POST"])
     def turn(cid):
@@ -353,13 +387,36 @@ def create_app(cfg=None):
                 url = messages["image"]
                 parts.append({"type":"file","mime":url[5:url.index(";")],"url":url})
             logger.info("Waiting for OpenCode reply case=%d agent=investigate-web", cid)
-            result = opencode("OpenCode send message case=%d" % cid, "/session/"+row["sid"]+"/message?"+urlencode({"directory":row["workspace"]}),
-                              dict(agent="investigate-web", system=SYSTEM, parts=parts))
-            answer = "\n".join(p["text"] for p in result.get("parts",[]) if p.get("type")=="text" and p.get("text"))
-            if result.get("info",{}).get("error") or not answer:
-                raise ServiceUnavailable("查案未取得完整回覆，可重新取得回覆。")
-            with db():
-                db().execute("INSERT INTO messages(cid,author,body) VALUES(?,?,?)",(cid,"@agent",answer))
+            active = dict(id=uuid.uuid4().hex, lock=threading.Lock(), stopped=False, finished=False)
+            if not turn_slots.acquire(blocking=False):
+                raise ServiceUnavailable("查案服務忙碌，請稍後重新取得回覆。")
+            with turns_lock:
+                active_turns[cid] = active
+            try:
+                result = None
+                try:
+                    result = opencode("OpenCode send message case=%d" % cid,
+                                      "/session/" + row["sid"] + "/message?" + urlencode({"directory": row["workspace"]}),
+                                      dict(agent="investigate-web", system=SYSTEM, parts=parts), timeout=None)
+                except ServiceUnavailable:
+                    with active["lock"]:
+                        if not active["stopped"]:
+                            raise
+                with active["lock"]:
+                    active["finished"] = True
+                    if active["stopped"]:
+                        answer = "此回合已由使用者終止。"
+                    else:
+                        answer = "\n".join(p["text"] for p in result.get("parts", [])
+                                           if p.get("type") == "text" and p.get("text"))
+                        if result.get("info", {}).get("error") or not answer:
+                            raise ServiceUnavailable("查案未取得完整回覆，可重新取得回覆。")
+                    with db():
+                        db().execute("INSERT INTO messages(cid,author,body) VALUES(?,?,?)", (cid, "@agent", answer))
+            finally:
+                with turns_lock:
+                    del active_turns[cid]
+                turn_slots.release()
             logger.info("OpenCode reply saved case=%d", cid)
             session_title(row)
         return "",204
