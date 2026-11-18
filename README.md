@@ -55,7 +55,7 @@ make run
 - **Session 簽章**保護瀏覽器中本服務的登入 cookie。首次啟動會在 `server.state_dir` 下的 `cases.sqlite` 自動建立隨機金鑰，後續重啟沿用。此目錄及備份限服務帳號存取。既有部署若要繼續使用原金鑰，可將舊 `SESSION_SECRET` 放入選用欄位 `server.session_secret`。更新前簽發的 cookie 沒有 email 欄位，需重新登入一次；日後更新內部帳號規則並重啟，既有 session 在下次 API 請求也會套用新規則。
 - 私有 repository 請在部署用的 `config.yml` 填入 `gitea.token`。使用能讀取目標 repository 的服務帳號 personal access token。首次抓取與後續更新共用此 token；留空時沿用原本的 Git 認證方式。修改後重啟服務。
 - **Gitea 登入回呼**為 `server.public_origin` 加 `server.prefix` 加 `/auth/callback`。將完整回呼登錄到 Gitea OAuth 應用程式，並填入 `gitea.client_id`、`gitea.client_secret`。
-- **上游服務**在 `opencode.url` 填專用 OpenCode Server 的基底位址。若啟用 Basic Auth，設定 `opencode.password` 與選用的 `opencode.username`。後端與 OpenCode 需能以相同路徑讀取案件快照。
+- **上游服務**在 `opencode.url` 填專用 OpenCode Server 的基底位址。可用 `opencode.model` 指定每回合的模型，格式為 `providerID/modelID`，僅以第一個斜線分隔。管理員可在側欄「查案模型設定」從 OpenCode 的 `GET /config/providers` 清單選取模型，寫入 SQLite 後優先於 YAML。新案、追問與重試會在每次送出前讀取，免重啟。兩處均未設定時交由 OpenCode 選擇。若啟用 Basic Auth，設定 `opencode.password` 與選用的 `opencode.username`。後端與 OpenCode 需能以相同路徑讀取案件快照。
 
 ## 服務日誌
 
@@ -72,5 +72,5 @@ make run
 1. 管理員在「管理程式索引」建立程式、owner/repository、main 或 master，以及可選的入口檔。同步使用服務帳號預設的 Git credential helper。
 2. 開案時，服務先確認服務帳號可讀取與進入填寫的執行目錄，再以 Git fetch 更新指定分支。每案記錄當時 commit。未填入口檔時，依程式檔名在對應 repository 內找唯一符合的檔案。
 3. 案件擷取執行位置第一層最多六個 log、err、out 檔，各取末尾 6000 bytes。程式入口最多擷取前 32000 bytes。另將常見程式碼檔案匯出為文字快照，最多 256 個檔案、總計 8 MB，排除隱藏路徑、符號連結及超過 256 KB 的檔案。
-4. 每案有獨立 OpenCode session。首次查案、使用者追問和管理員接手時，後端都指定 `investigate-web` agent。部署時須讓 OpenCode 從案件快照目錄也能載入這個 agent。案件 session 只開放 `read`、`glob`、`grep`，Bash 指令會直接被拒絕。部署時使用專用且受限的 OpenCode 作業系統帳號，僅授予案件快照所需的讀取權限。模型和 provider 憑證由 OpenCode 自己管理。圖片分析需要支援影像輸入的模型。
+4. 每案有獨立 OpenCode session。首次查案、使用者追問和管理員接手時，後端都指定 `investigate-web` agent。部署時須讓 OpenCode 從案件快照目錄也能載入這個 agent。案件 session 只開放 `read`、`glob`、`grep`，Bash 指令會直接被拒絕。部署時使用專用且受限的 OpenCode 作業系統帳號，僅授予案件快照所需的讀取權限。模型和 provider 憑證由 OpenCode 自己管理。每個有圖片的回合會先把原圖寫入該案快照的 `attachments/message-<訊息編號>.png` 或 `.jpg`，再傳送文字路徑請 agent 用 `read` 開啟。聊天室預覽沿用 SQLite 中的附件。圖片辨識仍取決於工具與模型的影像能力。
 5. 瀏覽器先儲存使用者訊息，再等待該回合回覆。服務使用本機檔案鎖避免同案並行送出。等待 OpenCode 調查回覆沒有應用程式時限。案件擁有者或管理員可以點「終止查案」中止該次回合，再於同案繼續提問。代理層的連線逾時需另行設定。案件及附件保存在部署環境。此版以單機部署為目標。

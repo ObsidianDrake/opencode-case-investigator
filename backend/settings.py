@@ -10,7 +10,7 @@ FIELDS = {
     "server": {"state_dir": "CASE_STATE", "public_origin": "PUBLIC_ORIGIN", "prefix": "CASE_PREFIX",
                "bind_host": "BIND_HOST", "port": "PORT", "session_secret": "SESSION_SECRET"},
     "gitea": {"url": "GITEA_BASE", "token": "GITEA_TOKEN", "client_id": "GITEA_CLIENT_ID", "client_secret": "GITEA_CLIENT_SECRET"},
-    "opencode": {"url": "OPENCODE_BASE", "username": "OPENCODE_SERVER_USERNAME",
+    "opencode": {"url": "OPENCODE_BASE", "model": "OPENCODE_MODEL", "username": "OPENCODE_SERVER_USERNAME",
                  "password": "OPENCODE_SERVER_PASSWORD"},
     "logging": {"directory": "LOG_DIR", "retention_days": "LOG_RETENTION_DAYS"},
     "traefik": {"upstream": "TRAEFIK_UPSTREAM"},

@@ -24,6 +24,7 @@ access_policy:
 
 opencode:
   url: "http://127.0.0.1:4096"   # OpenCode Server
+  # model: "provider/model-id"     # 選填；model ID 本身可含斜線
   # username: "opencode"          # 啟用 Basic Auth 時填入
   # password: ""
 

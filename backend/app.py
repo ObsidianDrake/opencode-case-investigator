@@ -76,6 +76,22 @@ def remote(operation, url, data=None, headers=None, form=False, timeout=150):
         raise ServiceUnavailable("上游服務無法回應，請稍後重試。") from None
 
 
+def save_turn_image(workspace, message):
+    header, encoded = message["image"].split(",", 1)
+    extension = {"data:image/png;base64": "png", "data:image/jpeg;base64": "jpg"}[header]
+    directory = Path(workspace) / "attachments"
+    directory.mkdir(exist_ok=True, mode=0o700)
+    target = directory / ("message-%d.%s" % (message["id"], extension))
+    with tempfile.NamedTemporaryFile(dir=directory, delete=False) as stream:
+        temporary = Path(stream.name)
+    try:
+        temporary.write_bytes(base64.b64decode(encoded, validate=True))
+        temporary.replace(target)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return target
+
+
 def create_app(cfg=None):
     env = load_settings() if cfg is None else cfg
     required = {"CASE_STATE": "server.state_dir", "PUBLIC_ORIGIN": "server.public_origin",
@@ -85,6 +101,11 @@ def create_app(cfg=None):
     for name, field in required.items():
         if not env.get(name):
             raise ValueError("Missing configuration: " + field)
+    default_model = env.get("OPENCODE_MODEL", "").strip()
+    model_pattern = re.compile(r"[^/\s\x00-\x1f\x7f]+(?:/[^/\s\x00-\x1f\x7f]+)+")
+    if default_model and not model_pattern.fullmatch(default_model):
+        raise ValueError("opencode.model must be providerID/modelID")
+
     def values(name, separator, default):
         raw = env.get(name, default)
         return raw.split(separator) if isinstance(raw, str) else raw
@@ -210,6 +231,50 @@ def create_app(cfg=None):
     def logout():
         session.clear()
         return "", 204
+
+    def current_model():
+        row = db().execute("SELECT value FROM service_settings WHERE name='investigation_model'").fetchone()
+        return row["value"] if row else default_model
+
+    @route("/api/admin/model", methods=["GET", "PUT"])
+    def model_settings():
+        if not g.user["admin"]:
+            abort(403)
+        if request.method == "PUT":
+            fields = request.get_json()
+            name = fields.get("model") if isinstance(fields, dict) else None
+            if not isinstance(name, str) or len(name) > 512 or not model_pattern.fullmatch(name.strip()):
+                abort(400, "請填寫完整模型名稱，格式為 providerID/modelID。")
+            with db():
+                db().execute("INSERT OR REPLACE INTO service_settings(name,value) VALUES('investigation_model',?)",
+                             (name.strip(),))
+            logger.info("Investigation model updated user_id=%s model=%s", g.user["id"], name.strip())
+        return jsonify(model=current_model())
+
+    @route("/api/admin/models")
+    def available_models():
+        if not g.user["admin"]:
+            abort(403)
+        catalog = opencode("OpenCode list models", "/config/providers", timeout=10)
+        providers = catalog.get("providers") if isinstance(catalog, dict) else None
+        if not isinstance(providers, list):
+            logger.error("OpenCode list models failed: expected providers array")
+            abort(502, "OpenCode 回傳的模型清單格式不符。")
+        models = {}
+        for provider in providers:
+            if not isinstance(provider, dict) or not isinstance(provider.get("models"), dict):
+                continue
+            provider_id = provider.get("id")
+            if not isinstance(provider_id, str) or "/" in provider_id:
+                continue
+            for key, details in provider["models"].items():
+                name = provider_id + "/" + key
+                if not model_pattern.fullmatch(name) or len(name) > 512:
+                    continue
+                capabilities = details.get("capabilities") if isinstance(details, dict) else None
+                inputs = capabilities.get("input") if isinstance(capabilities, dict) else None
+                models[name] = isinstance(inputs, dict) and inputs.get("image") is True
+        return jsonify([{"id": name, "image_input": models[name]} for name in sorted(models)])
 
     @route("/api/programs", methods=["GET","POST"])
     def programs():
@@ -384,9 +449,16 @@ def create_app(cfg=None):
                 return "",204
             parts = [{"type":"text","text":"使用者訊息\n"+messages["body"]+"\n調查資料\n"+row["evidence"]}]
             if messages["image"]:
-                url = messages["image"]
-                parts.append({"type":"file","mime":url[5:url.index(";")],"url":url})
-            logger.info("Waiting for OpenCode reply case=%d agent=investigate-web", cid)
+                path = save_turn_image(row["workspace"], messages)
+                parts.append({"type": "text", "text": "本回合附有圖片，請使用 read 工具開啟以下圖片檔案，再依據圖片內容回答。若讀取失敗，請說明原因。\n" + str(path)})
+                logger.info("Image ready for OpenCode read case=%d file=%s", cid, path.name)
+            payload = dict(agent="investigate-web", system=SYSTEM, parts=parts)
+            model_name = current_model()
+            if model_name:
+                provider, model_id = model_name.split("/", 1)
+                payload["model"] = {"providerID": provider, "modelID": model_id}
+            logger.info("Waiting for OpenCode reply case=%d agent=investigate-web requested_model=%s",
+                        cid, model_name or "<server default>")
             active = dict(id=uuid.uuid4().hex, lock=threading.Lock(), stopped=False, finished=False)
             if not turn_slots.acquire(blocking=False):
                 raise ServiceUnavailable("查案服務忙碌，請稍後重新取得回覆。")
@@ -397,7 +469,10 @@ def create_app(cfg=None):
                 try:
                     result = opencode("OpenCode send message case=%d" % cid,
                                       "/session/" + row["sid"] + "/message?" + urlencode({"directory": row["workspace"]}),
-                                      dict(agent="investigate-web", system=SYSTEM, parts=parts), timeout=None)
+                                      payload, timeout=None)
+                    info = result.get("info", {})
+                    logger.info("OpenCode reply case=%d providerID=%s modelID=%s", cid,
+                                info.get("providerID", "<unreported>"), info.get("modelID", "<unreported>"))
                 except ServiceUnavailable:
                     with active["lock"]:
                         if not active["stopped"]:

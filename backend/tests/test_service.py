@@ -25,6 +25,7 @@ class ServiceTests(unittest.TestCase):
                    GITEA_BASE="gitea", PUBLIC_ORIGIN="public", GITEA_CLIENT_ID="id",
                    GITEA_CLIENT_SECRET="test", INTERNAL_DOMAINS="internal.invalid",
                    SESSION_SECRET="test-only", OPENCODE_BASE="agent")
+        self.env = env
         self.client = create_app(env).test_client()
 
     def user(self, uid=1, admin=False):
@@ -55,6 +56,38 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(self.api("GET","programs").json,[{"name":"demo"}])
         self.assertEqual(self.api("DELETE","programs/demo").status_code,403)
         self.assertEqual(self.client.post(self.prefix+"/api/logout").status_code,403)
+
+    def test_model_settings_access_validation_and_restart(self):
+        self.assertEqual(self.api("GET", "admin/model").status_code, 401)
+        self.user()
+        self.assertEqual(self.api("GET", "admin/model").status_code, 403)
+        self.assertEqual(self.api("PUT", "admin/model", json={"model": "test/model"}).status_code, 403)
+        self.user(admin=True)
+        self.assertEqual(self.api("GET", "admin/model").json, {"model": ""})
+        self.assertEqual(self.api("PUT", "admin/model", json={"model": "test/vendor/model"}).status_code, 200)
+        for invalid in ("", "test", "test/", "/model", "test//id", "test/a b", None):
+            self.assertEqual(self.api("PUT", "admin/model", json={"model": invalid}).status_code, 400)
+        self.client = create_app(dict(self.env, OPENCODE_MODEL="other/default")).test_client()
+        self.user(admin=True)
+        self.assertEqual(self.api("GET", "admin/model").json, {"model": "test/vendor/model"})
+
+    @patch("app.remote")
+    def test_available_models(self, remote):
+        self.assertEqual(self.api("GET", "admin/models").status_code, 401)
+        self.user()
+        self.assertEqual(self.api("GET", "admin/models").status_code, 403)
+        remote.assert_not_called()
+        self.user(admin=True)
+        remote.return_value = {"providers": [{"id": "gateway", "options": {"apiKey": "private"},
+            "models": {"vendor/vision": {"capabilities": {"input": {"image": True}}}, "text": {}}}]}
+        self.assertEqual(self.api("GET", "admin/models").json, [
+            {"id": "gateway/text", "image_input": False},
+            {"id": "gateway/vendor/vision", "image_input": True}])
+        remote.assert_called_once_with("OpenCode list models", "agent/config/providers", None, {}, timeout=10)
+        remote.return_value = {"providers": []}
+        self.assertEqual(self.api("GET", "admin/models").json, [])
+        remote.return_value = {}
+        self.assertEqual(self.api("GET", "admin/models").status_code, 502)
 
     def test_edit_and_delete_mapping(self):
         self.mapping()
@@ -96,6 +129,7 @@ class ServiceTests(unittest.TestCase):
     @patch("app.remote")
     @patch("app.source_context",return_value=("revision","source"))
     def test_case_with_image_admin_continuation(self,source,remote):
+        self.client = create_app(dict(self.env, OPENCODE_MODEL="gateway/vendor/vision")).test_client()
         self.mapping()
         self.user()
         remote.side_effect = [{"id":"session"}, {"parts":[{"type":"text","text":"需要更多資訊"}]},
@@ -107,14 +141,33 @@ class ServiceTests(unittest.TestCase):
         cid = "cases/"+str(create.json["id"])
         self.assertEqual(self.api("POST",cid+"/turn").status_code,204)
         self.assertEqual(remote.call_args_list[1].args[2]["agent"], "investigate-web")
-        self.assertEqual(remote.call_args_list[1].args[2]["parts"][1]["mime"],"image/png")
+        def check_image(call, expected, suffix):
+            parts = call.args[2]["parts"]
+            self.assertEqual([part["type"] for part in parts], ["text", "text"])
+            self.assertNotIn("data:image/", str(parts))
+            instruction, filename = parts[1]["text"].split("\n")
+            self.assertIn("read", instruction)
+            path = Path(filename)
+            self.assertEqual(path.parent.name, "attachments")
+            self.assertEqual(path.suffix, suffix)
+            self.assertEqual(path.read_bytes(), expected)
+            return path
+        expected_model = {"providerID": "gateway", "modelID": "vendor/vision"}
+        self.assertEqual(remote.call_args_list[1].args[2]["model"], expected_model)
+        first = check_image(remote.call_args_list[1], b"\x89PNG\r\n\x1a\nabc", ".png")
         self.assertNotIn("title",remote.call_args_list[0].args[2])
         self.assertEqual(self.api("GET","cases").json[0]["session_title"],"輸入資料異常")
         self.assertEqual(self.api("GET",cid).json["session_title"],"輸入資料異常")
         self.user(2)
         self.assertEqual(self.api("GET",cid).status_code,404)
         self.user(2,True)
-        self.assertEqual(self.api("POST",cid+"/turn",data=dict(text="補充")).status_code,204)
+        self.assertEqual(self.api("PUT", "admin/model", json={"model":"gateway/next/vision"}).status_code, 200)
+        jpeg = b"\xff\xd8\xfftest"
+        self.assertEqual(self.api("POST",cid+"/turn",data=dict(text="補充", image=(io.BytesIO(jpeg), "capture.jpg"))).status_code,204)
+        self.assertEqual(remote.call_args.args[2]["model"], {"providerID":"gateway", "modelID":"next/vision"})
+        followup = check_image(remote.call_args, jpeg, ".jpg")
+        self.assertEqual(first.parent, followup.parent)
+        self.assertTrue(first.is_file())
         self.assertEqual(remote.call_args.args[2]["agent"], "investigate-web")
         messages = self.api("GET",cid).json["messages"]
         self.assertEqual([m["author"] for m in messages],["alice","@agent","bob","@agent"])
@@ -125,6 +178,7 @@ class ServiceTests(unittest.TestCase):
         started, stopped = threading.Event(), threading.Event()
         def upstream(operation, url, *args, **kwargs):
             if "/message?" in url:
+                self.assertNotIn("model", args[0])
                 self.assertIsNone(kwargs["timeout"])
                 started.set()
                 self.assertTrue(stopped.wait(5))

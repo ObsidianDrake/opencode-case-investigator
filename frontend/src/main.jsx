@@ -91,6 +91,10 @@ function App() {
   const [programs, setPrograms] = useState([]);
   const [view, setView] = useState('intake');
   const [thread, setThread] = useState(null);
+  const [model, setModel] = useState('');
+  const [models, setModels] = useState([]);
+  const [choice, setChoice] = useState('');
+  const [catalogStatus, setCatalogStatus] = useState('');
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
   const [thinking, setThinking] = useState(false);
@@ -154,6 +158,37 @@ function App() {
     return act(async () => { setPrograms(await api('programs')); setView(next); });
   }
 
+  function openModelSettings() {
+    return act(async () => {
+      const saved = (await api('admin/model')).model;
+      setModel(saved);
+      setChoice('');
+      setModels([]);
+      setCatalogStatus('正在讀取 OpenCode 模型清單…');
+      setView('model');
+      try {
+        const list = await api('admin/models');
+        setModels(list);
+        setChoice(list.some(item => item.id === saved) ? saved : '');
+        setCatalogStatus(list.length ? '' : 'OpenCode 目前未列出模型。');
+      } catch (error) {
+        if (error.status === 401 || error.status === 403) throw error;
+        setCatalogStatus('無法取得 OpenCode 模型清單。' + error.message);
+      }
+    });
+  }
+
+  async function saveModel(event) {
+    event.preventDefault();
+    if (!choice) return;
+    if (await act(async () => {
+      const result = await api('admin/model', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: choice })
+      });
+      setModel(result.model);
+    })) setStatus('已儲存模型設定');
+  }
+
   function changeProgram(name, options) {
     return act(async () => {
       await api('programs' + (name ? '/' + encodeURIComponent(name) : ''), options);
@@ -183,7 +218,26 @@ function App() {
         </button>)}</nav>
         {filter && !visible.length && <p id="no-matches" role="status">沒有符合的案件</p>}
         {user.admin && <button id="manage" disabled={busy} onClick={() => switchView('admin')}>管理程式索引</button>}
+        {user.admin && <button id="model-settings" disabled={busy} onClick={openModelSettings}>查案模型設定</button>}
       </aside><article>
+        {view === 'model' && user.admin && <section>
+          <Hero label="管理員" title="查案模型設定" />
+          <form id="model-form" onSubmit={saveModel}>
+            <p>目前模型：<strong>{model || '由 OpenCode 選擇'}</strong></p>
+            <label>可用模型<select name="model" value={choice}
+              onChange={event => setChoice(event.target.value)} required disabled={busy || !models.length}>
+              <option value="" disabled>請選擇模型</option>
+              {models.map(item => <option key={item.id} value={item.id}>
+                {item.id}{item.image_input ? '（支援圖片）' : ''}
+              </option>)}
+            </select></label>
+            {catalogStatus && <p role="status">{catalogStatus}</p>}
+            <button type="button" disabled={busy} onClick={openModelSettings}>重新取得清單</button>
+            <p>儲存後，所有案件從下一次提問起使用此模型。</p>
+            <button className="primary" disabled={busy || !choice}>儲存模型</button>
+          </form>
+        </section>}
+
         <section id="intake" hidden={view !== 'intake'}><Hero label="查案助理" title="開始新的調查" />
           <MessageForm programs={programs} busy={busy} onSend={createCase} onError={setStatus} />
         </section>
