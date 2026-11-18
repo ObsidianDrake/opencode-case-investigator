@@ -1,5 +1,7 @@
 import base64
 import json
+import logging
+import time
 import os
 import re
 import secrets
@@ -19,6 +21,8 @@ from werkzeug.exceptions import HTTPException, ServiceUnavailable
 
 from settings import internal_email, load_settings
 from evidence import PROGRAM, REPOSITORY, run_evidence, source_context
+
+logger = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS service_settings(name TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -43,7 +47,8 @@ def remote(url, data=None, headers=None, form=False, timeout=150):
     try:
         with urlopen(Request(url, data=body, headers=headers), timeout=timeout) as response:
             return json.load(response)
-    except (ValueError, URLError, TimeoutError, OSError):
+    except (ValueError, URLError, TimeoutError, OSError) as exc:
+        logger.warning("Upstream request failed: %s status=%s", type(exc).__name__, getattr(exc, "code", "-"))
         raise ServiceUnavailable("上游服務無法回應，請稍後重試。")
 
 
@@ -104,6 +109,10 @@ def create_app(cfg=None):
 
     @app.after_request
     def private_response(response):
+        route_name = request.url_rule.rule if request.url_rule else "<unmatched>"
+        logger.log(logging.ERROR if response.status_code >= 500 else logging.INFO,
+                   "HTTP %s %s status=%d elapsed=%.3fs", request.method, route_name,
+                   response.status_code, time.monotonic() - g.started)
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Content-Security-Policy"] = "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'"
@@ -158,6 +167,7 @@ def create_app(cfg=None):
 
     @app.before_request
     def guard():
+        g.started = time.monotonic()
         if request.path.startswith(prefix + "/api/"):
             if not session.get("user"):
                 abort(401)
@@ -254,11 +264,14 @@ def create_app(cfg=None):
         mapping = db().execute("SELECT repo,branch,entry FROM programs WHERE name=?",(program,)).fetchone()
         if not mapping:
             abort(400,"請先選取已登錄的程式。")
+        logger.info("Collecting run evidence program=%s", program)
         folder, logs = run_evidence(request.form.get("folder", ""))
         workspace = Path(tempfile.mkdtemp(prefix="snapshot-",dir=state))
         try:
+            logger.info("Syncing Gitea repository=%s branch=%s", mapping[0], mapping[1])
             revision,source = source_context(state, base, mapping, program, workspace, token=env.get("GITEA_TOKEN"))
             evidence = "版本 "+revision+"\n程式碼\n"+source+"\n執行紀錄\n"+logs
+            logger.info("Source snapshot ready revision=%s; creating OpenCode session", revision)
             sid = opencode("/session?" + urlencode({"directory":str(workspace)}), {"permission":[
                 {"permission":"*","pattern":"*","action":"deny"},
                 *[{"permission":tool,"pattern":"*","action":"allow"} for tool in ("read","grep","glob")]]})["id"]
@@ -269,6 +282,7 @@ def create_app(cfg=None):
         except Exception:
             shutil.rmtree(workspace)
             raise
+        logger.info("Case created case=%d program=%s", cid, program)
         return jsonify(id=cid),201
 
     def session_title(row):
@@ -316,6 +330,7 @@ def create_app(cfg=None):
             if messages["image"]:
                 url = messages["image"]
                 parts.append({"type":"file","mime":url[5:url.index(";")],"url":url})
+            logger.info("Waiting for OpenCode reply case=%d agent=investigate-web", cid)
             result = opencode("/session/"+row["sid"]+"/message?"+urlencode({"directory":row["workspace"]}),
                               dict(agent="investigate-web", system=SYSTEM, parts=parts))
             answer = "\n".join(p["text"] for p in result.get("parts",[]) if p.get("type")=="text" and p.get("text"))
@@ -323,6 +338,7 @@ def create_app(cfg=None):
                 raise ServiceUnavailable("查案未取得完整回覆，可重新取得回覆。")
             with db():
                 db().execute("INSERT INTO messages(cid,author,body) VALUES(?,?,?)",(cid,"@agent",answer))
+            logger.info("OpenCode reply saved case=%d", cid)
             session_title(row)
         return "",204
 

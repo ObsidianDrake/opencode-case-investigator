@@ -12,6 +12,7 @@ FIELDS = {
     "gitea": {"url": "GITEA_BASE", "token": "GITEA_TOKEN", "client_id": "GITEA_CLIENT_ID", "client_secret": "GITEA_CLIENT_SECRET"},
     "opencode": {"url": "OPENCODE_BASE", "username": "OPENCODE_SERVER_USERNAME",
                  "password": "OPENCODE_SERVER_PASSWORD"},
+    "logging": {"directory": "LOG_DIR", "retention_days": "LOG_RETENTION_DAYS"},
     "traefik": {"upstream": "TRAEFIK_UPSTREAM"},
 }
 
@@ -49,6 +50,9 @@ def load_settings(path=None):
                 if key == "port":
                     if type(value) is not int or not 1 <= value <= 65535:
                         raise ValueError("server.port must be an integer between 1 and 65535")
+                elif key == "retention_days":
+                    if type(value) is not int or value < 1:
+                        raise ValueError("logging.retention_days must be a positive integer")
                 elif not isinstance(value, str):
                     raise ValueError("%s.%s must be a string" % (section, key))
                 settings[name] = value

@@ -57,6 +57,12 @@ make run
 - **Gitea 登入回呼**為 `server.public_origin` 加 `server.prefix` 加 `/auth/callback`。將完整回呼登錄到 Gitea OAuth 應用程式，並填入 `gitea.client_id`、`gitea.client_secret`。
 - **上游服務**在 `opencode.url` 填專用 OpenCode Server 的基底位址。若啟用 Basic Auth，設定 `opencode.password` 與選用的 `opencode.username`。後端與 OpenCode 需能以相同路徑讀取案件快照。
 
+## 服務日誌
+
+服務同步輸出到終端機 stderr 和 `server.state_dir/logs/case-investigator.log`。可用 `logging.directory` 指定目錄。日誌包含啟動及監聽位址、HTTP 狀態與耗時、案件建立、Git 同步、OpenCode 等待與回覆。
+
+以主機當地午夜為切點，跨日後的第一筆紀錄會將舊檔更名為 `case-investigator.log.YYYY-MM-DD`。服務在啟動和輪替時清理超過 `logging.retention_days` 的日期檔，預設保留前 14 天及當天。可用 `tail -F` 持續查看目前的日誌。
+
 ## Traefik
 
 設定 `server.prefix` 與 `traefik.upstream` 後，執行 `make route > deploy/cases.toml`，自訂檔案路徑可加 `CONFIG=/path/to/config.yml`。將產物放入現有 Traefik file provider 目錄。使用專用 router 或沿用環境的 entrypoint 與 TLS 設定。此 route 保留 CASE_PREFIX，請勿套用 StripPrefix。瀏覽器開啟 CASE_PREFIX 時，後端會導向帶尾斜線的入口，靜態資源、API 與登入回呼皆經過該 route。上游逾時應涵蓋 Git 同步與模型回覆時間。

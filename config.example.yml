@@ -6,6 +6,10 @@ server:
   port: 8000
   state_dir: "/var/lib/case-investigator"         # 案件、快照、Git 快取及 session 簽章金鑰
 
+logging:
+  # directory: "/var/log/case-investigator"  # 預設為 server.state_dir 下的 logs
+  retention_days: 14
+
 gitea:
   url: "https://gitea.example.invalid"
   token: ""  # 選填，用於讀取私有 repository 的 Gitea personal access token

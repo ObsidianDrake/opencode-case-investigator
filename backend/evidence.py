@@ -1,6 +1,7 @@
 """Collect bounded text evidence without executing anything from a case."""
 import fcntl
 import hashlib
+import logging
 import os
 import re
 import stat
@@ -66,7 +67,10 @@ def git(directory, *args, credential=None):
         return subprocess.run(["git", "-C", str(directory), *args], check=True,
                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                               timeout=90, env=env).stdout
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as exc:
+        operation = "fetch" if "fetch" in args else args[0]
+        logging.getLogger(__name__).error("Git %s failed: %s exit=%s", operation, type(exc).__name__,
+                                          getattr(exc, "returncode", "-"))
         raise ServiceUnavailable("無法同步或讀取來源版本，請確認 repository 和服務帳號權限。")
 
 
