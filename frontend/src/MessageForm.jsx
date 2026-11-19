@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
+import SearchPicker from './SearchPicker';
+
 const programOrder = new Intl.Collator('en', { sensitivity: 'base' });
 
 export default function MessageForm({ programs, busy, onSend, onError }) {
@@ -8,6 +10,9 @@ export default function MessageForm({ programs, busy, onSend, onError }) {
     () => (programs || []).map(program => program.name).sort(programOrder.compare),
     [programs]
   );
+  const [program, setProgram] = useState('');
+  const [programError, setProgramError] = useState('');
+  const selectedProgram = programNames.includes(program) ? program : '';
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState('');
   const textarea = useRef(null);
@@ -37,34 +42,25 @@ export default function MessageForm({ programs, busy, onSend, onError }) {
     if (busy) return;
     const form = event.currentTarget;
     const data = new FormData(form);
-    if (intake) {
-      const input = form.elements.program;
-      const typed = input.value.trim();
-      const matches = programNames.filter(name => name.toLowerCase() === typed.toLowerCase());
-      const name = programNames.includes(typed) ? typed : matches.length === 1 ? matches[0] : null;
-      if (!name) {
-        input.setCustomValidity('請從清單選擇已登錄的程式。');
-        input.reportValidity();
-        return;
-      }
-      data.set('program', name);
+    if (intake && !selectedProgram) {
+      setProgramError('請從清單選擇已登錄的程式。');
+      form.querySelector('#program-trigger').focus();
+      return;
     }
     if (file) data.set('image', file, file.name || 'capture.png');
     if (await onSend(data)) {
       form.reset();
+      setProgram('');
       select(null);
     }
   }
 
   return <form id={intake ? 'report' : 'reply'} onSubmit={submit}>
     {intake && <>
-      <label>執行的程式 <small>必填</small>
-        <input name="program" list="intake-programs" placeholder="輸入程式名稱搜尋…" required
-          autoComplete="off" onInput={event => event.currentTarget.setCustomValidity('')} />
-      </label>
-      <datalist id="intake-programs">
-        {programNames.map(name => <option key={name} value={name} />)}
-      </datalist>
+      <SearchPicker name="program" label="執行的程式" prompt="選擇程式" placeholder="輸入程式名稱搜尋"
+        emptyMessage="沒有符合的程式" required disabled={busy}
+        value={selectedProgram} validationError={programError} options={programNames}
+        onChange={name => { setProgram(name); setProgramError(''); }} />
       <label>程式執行位置 <small>必填</small>
         <input name="folder" placeholder="執行目錄絕對路徑（需有群組寫入權限）" required />
       </label>

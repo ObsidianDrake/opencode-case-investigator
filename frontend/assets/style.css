@@ -339,14 +339,14 @@ body:has(#login:not([hidden])) header {
 .skill-picker label { display: flex; align-items: center; gap: 8px; }
 .skill-picker input[type=checkbox] { width: auto; margin: 0; }
 
-.repo-picker { min-width: 0; margin: 12px 0; border: 1px solid var(--line); }
-.repo-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.repo-actions button { max-width: 100%; overflow-wrap: anywhere; }
-.repo-browser { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin-top: 8px; }
-.repo-browser input { margin: 0; }
-.repo-browser p { margin: 0; }
-.repo-actions:empty, .repo-results:empty { display: none; }
-.repo-results { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; max-height: 13rem; overflow-y: auto; }
-.repo-results button { text-align: left; overflow-wrap: anywhere; }
+.search-picker { min-width: 0; margin: 12px 0; border: 1px solid var(--line); }
+.picker-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.picker-actions button { max-width: 100%; overflow-wrap: anywhere; }
+.picker-browser { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin-top: 8px; }
+.picker-browser input { margin: 0; }
+.picker-browser p { margin: 0; }
+.picker-actions:empty, .picker-results:empty { display: none; }
+.picker-results { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; max-height: 13rem; overflow-y: auto; }
+.picker-results button { text-align: left; overflow-wrap: anywhere; }
 
 #mapping input[name="program_path"]::placeholder { color: #999; opacity: 1; }
