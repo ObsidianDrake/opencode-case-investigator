@@ -48,6 +48,7 @@ class ServiceTests(unittest.TestCase):
 
     @patch("app.remote")
     def test_repository_search(self, remote):
+        self.client = create_app(dict(self.env, GITEA_TOKEN=" configured-pat ")).test_client()
         self.user()
         self.assertEqual(self.api("GET", "admin/repositories").status_code, 403)
         remote.assert_not_called()
@@ -59,6 +60,38 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(url.path.endswith("/api/v1/repos/search"))
         self.assertEqual(parse_qs(url.query)["page"], ["2"])
         self.assertEqual(parse_qs(url.query)["q"], ["sample"])
+        self.assertEqual(parse_qs(url.query)["private"], ["true"])
+        self.assertEqual(remote.call_args.kwargs["headers"], {"Authorization": "token configured-pat"})
+
+    @patch("app.remote")
+    def test_repository_search_with_admin_oauth(self, remote):
+        self.user(admin=True)
+        self.assertEqual(self.api("GET", "admin/repositories").status_code, 403)
+        remote.assert_not_called()
+        login = self.client.get(self.prefix + "/auth/login")
+        params = parse_qs(urlsplit(login.location).query)
+        self.assertIn("read:repository", params["scope"][0].split())
+        remote.side_effect = [
+            {"access_token": "admin-credential", "expires_in": 600},
+            {"id": 1, "login": "alice", "email": "alice@internal.invalid", "is_admin": True},
+            {"data": [{"full_name": "private/project"}]},
+        ]
+        self.client.get(self.prefix + "/auth/callback", query_string={"code": "test", "state": params["state"][0]})
+        with self.client.session_transaction(path=self.prefix + "/") as cookie:
+            self.assertNotIn("admin-credential", str(dict(cookie)))
+            credential_id = cookie["repository_session"]
+        self.assertEqual(self.api("GET", "admin/repositories").json["names"], ["private/project"])
+        self.assertEqual(remote.call_args.kwargs["headers"], {"Authorization": "Bearer admin-credential"})
+        self.user(uid=2, admin=True)
+        self.assertEqual(self.api("GET", "admin/repositories").status_code, 403)
+        self.user(admin=True)
+        with sqlite3.connect(self.root / "state/cases.sqlite") as db:
+            db.execute("UPDATE repository_sessions SET expires_at=0 WHERE id=?", (credential_id,))
+        self.assertEqual(self.api("GET", "admin/repositories").status_code, 403)
+        self.api("POST", "logout")
+        with sqlite3.connect(self.root / "state/cases.sqlite") as db:
+            self.assertIsNone(db.execute("SELECT id FROM repository_sessions").fetchone())
+        self.assertEqual(remote.call_count, 3)
 
     @patch("app.remote")
     @patch("app.source_context")

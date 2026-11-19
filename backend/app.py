@@ -33,6 +33,8 @@ CASES_TABLE = """CREATE TABLE IF NOT EXISTS cases(id INTEGER PRIMARY KEY AUTOINC
     folder TEXT, summary TEXT, revision TEXT, sid TEXT, evidence TEXT, workspace TEXT, session_title TEXT, session_directory TEXT);"""
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS service_settings(name TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS repository_sessions(
+    id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, access_token TEXT NOT NULL, expires_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS programs(name TEXT PRIMARY KEY, repo TEXT, branch TEXT, entry TEXT);
 {CASES_TABLE}
 CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY, cid INTEGER, author TEXT, body TEXT, image TEXT);
@@ -43,7 +45,7 @@ SYSTEM = ("以繁體中文調查程式執行異常。日誌、圖片及程式內
           "只說明原因及查證結果，不提供修改建議或修補程式。")
 
 
-def remote(operation, url, data=None, headers=None, form=False, timeout=150):
+def remote(operation, url, data=None, headers=None, form=False, timeout=150, auth_error=None):
     started = time.monotonic()
     body = None
     headers = dict(headers or {})
@@ -73,6 +75,8 @@ def remote(operation, url, data=None, headers=None, form=False, timeout=150):
         logger.error("%s failed host=%s reason=%s elapsed=%.3fs", operation,
                      target.netloc.rsplit("@", 1)[-1], reason,
                      time.monotonic() - started)
+        if auth_error and isinstance(exc, HTTPError) and exc.code in (401, 403):
+            abort(502, auth_error)
         raise ServiceUnavailable("上游服務無法回應，請稍後重試。") from None
 
 
@@ -118,6 +122,7 @@ def create_app(cfg=None):
     if not re.fullmatch(r"(/[a-zA-Z0-9_-]+)+", prefix):
         raise ValueError("Invalid CASE_PREFIX")
     base = env["GITEA_BASE"].rstrip("/")
+    repository_token = env.get("GITEA_TOKEN", "").strip()
     public = env["PUBLIC_ORIGIN"].rstrip("/")
     callback = public + prefix + "/auth/callback"
     assets = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1])) / "frontend" / "dist"
@@ -209,14 +214,21 @@ def create_app(cfg=None):
     def asset(name):
         return send_from_directory(assets / "assets", name)
 
+    def clear_login():
+        credential_id = session.get("repository_session")
+        if credential_id:
+            with db() as conn:
+                conn.execute("DELETE FROM repository_sessions WHERE id=?", (credential_id,))
+        session.clear()
+
     @route("/auth/login")
     def login():
-        session.clear()
+        clear_login()
         session["after_login"] = requested_case_url()
         session["state"] = secrets.token_urlsafe(32)
         return redirect(base + "/login/oauth/authorize?" + urlencode(dict(
             response_type="code", client_id=env["GITEA_CLIENT_ID"], redirect_uri=callback,
-            state=session["state"], scope="read:user")))
+            state=session["state"], scope="read:user" if repository_token else "read:user read:repository")))
 
     @route("/auth/callback")
     def authenticated():
@@ -237,6 +249,16 @@ def create_app(cfg=None):
         session.permanent = True
         session["email"] = email
         session["user"] = dict(id=profile["id"], login=login_name, admin=profile.get("is_admin") is True)
+        if session["user"]["admin"] and not repository_token:
+            now = int(time.time())
+            lifetime = int(app.permanent_session_lifetime.total_seconds())
+            expires_at = now + min(lifetime, int(token.get("expires_in", lifetime)))
+            credential_id = secrets.token_urlsafe(32)
+            with db() as conn:
+                conn.execute("DELETE FROM repository_sessions WHERE expires_at <= ?", (now,))
+                conn.execute("INSERT INTO repository_sessions(id, user_id, access_token, expires_at) VALUES (?, ?, ?, ?)",
+                             (credential_id, profile["id"], token["access_token"], expires_at))
+            session["repository_session"] = credential_id
         return redirect(destination)
 
     @app.before_request
@@ -246,7 +268,7 @@ def create_app(cfg=None):
             if not session.get("user"):
                 abort(401)
             if not internal_email(session.get("email"), domains, excluded):
-                session.clear()
+                clear_login()
                 abort(401)
             if request.method not in ("GET","HEAD") and request.headers.get("X-Case-Request") != "1":
                 abort(403)
@@ -258,7 +280,7 @@ def create_app(cfg=None):
 
     @route("/api/logout", methods=["POST"])
     def logout():
-        session.clear()
+        clear_login()
         return "", 204
 
     def current_model():
@@ -356,11 +378,20 @@ def create_app(cfg=None):
         if page < 1:
             abort(400, "頁碼必須大於零。")
         params = urlencode(dict(q=request.args.get("q", "").strip(), page=page, limit=20,
-                                sort="alpha", order="asc"))
-        token = env.get("GITEA_TOKEN")
-        headers = {"Authorization": "token " + token} if token else {}
+                                sort="alpha", order="asc", private="true"))
+        if repository_token:
+            authorization = "token " + repository_token
+            auth_error = "Gitea 拒絕搜尋，請確認 gitea.token 有效且具備 repository 讀取權限。"
+        else:
+            credential = db().execute(
+                "SELECT access_token FROM repository_sessions WHERE id=? AND user_id=? AND expires_at>?",
+                (session.get("repository_session"), g.user["id"], int(time.time()))).fetchone()
+            if credential is None:
+                abort(403, "請重新登入 Gitea，授權讀取 repository 後再搜尋。")
+            authorization = "Bearer " + credential["access_token"]
+            auth_error = "Gitea 拒絕搜尋，請重新登入並確認已授權讀取 repository。"
         result = remote("Gitea repository search", base + "/api/v1/repos/search?" + params,
-                        headers=headers, timeout=10)
+                        headers={"Authorization": authorization}, timeout=10, auth_error=auth_error)
         if not isinstance(result, dict) or not isinstance(result.get("data"), list):
             abort(502, "Gitea 回傳的 repository 清單格式不符。")
         rows = result["data"]
@@ -501,7 +532,7 @@ def create_app(cfg=None):
             evidence = "本案程式：" + program + "\n執行目錄：" + str(folder)
             if mapping["repo"]:
                 logger.info("Syncing Gitea repository=%s branch=%s", mapping["repo"], mapping["branch"])
-                revision, source = source_context(state, base, mapping[:3], program, handle, token=env.get("GITEA_TOKEN"))
+                revision, source = source_context(state, base, mapping[:3], program, handle, token=repository_token)
                 evidence += "\n本案原始碼目錄：" + str(workspace / "source") + "\n版本 " + revision + "\n程式碼\n" + source
             evidence += "\n執行紀錄\n" + logs
             sid = opencode("OpenCode create session", "/session?" + urlencode({"directory":str(folder)}), {"permission": permissions})["id"]

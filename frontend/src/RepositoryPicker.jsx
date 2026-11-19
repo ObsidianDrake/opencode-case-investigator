@@ -32,18 +32,22 @@ export default function RepositoryPicker({ value, onChange, searchRepos }) {
   return <fieldset className="repo-picker">
     <legend>Gitea repository（選填）</legend>
     <input type="hidden" name="repo" value={value} />
-    <button type="button" aria-expanded={open} onClick={() => open ? setOpen(false) : browse('', 1)}>
-      {value || '選擇 repository'}</button>
-    {value && <button type="button" onClick={() => { onChange(''); setOpen(false); }}>清除選擇</button>}
-    {open && <div>
+    <div className="repo-actions">
+      <button type="button" aria-expanded={open} onClick={() => open ? setOpen(false) : browse('', 1)}>
+        {value || '選擇 repository'}</button>
+      {value && <button type="button" onClick={() => { onChange(''); setOpen(false); }}>清除選擇</button>}
+    </div>
+    {open && <div className="repo-browser">
       <input type="search" autoFocus aria-label="搜尋 Gitea repository" placeholder="輸入 repository 名稱搜尋"
         value={query} onChange={event => browse(event.target.value, 1)} />
       <div className="repo-results">{result?.names.map(name =>
         <button key={name} type="button" onClick={() => { onChange(name); setOpen(false); }}>{name}</button>)}</div>
       {error ? <p role="alert">{error}</p> : !result ? <p role="status">搜尋中…</p>
         : !result.names.length && <p role="status">沒有符合的 repository</p>}
-      {page > 1 && <button type="button" onClick={() => browse(query, page - 1)}>上一頁</button>}
-      {result?.has_more && <button type="button" onClick={() => browse(query, page + 1)}>下一頁</button>}
+      <div className="repo-actions">
+        {page > 1 && <button type="button" onClick={() => browse(query, page - 1)}>上一頁</button>}
+        {result?.has_more && <button type="button" onClick={() => browse(query, page + 1)}>下一頁</button>}
+      </div>
     </div>}
   </fieldset>;
 }

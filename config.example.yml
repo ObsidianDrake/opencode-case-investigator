@@ -12,7 +12,7 @@ logging:
 
 gitea:
   url: "https://gitea.example.invalid"
-  token: ""  # 選填，用於讀取私有 repository 的 Gitea personal access token
+  token: ""  # 選填，搜尋與 Git 抓取共用的 personal access token；留空時搜尋使用登入管理員的 OAuth token
   client_id: ""
   client_secret: ""
 
