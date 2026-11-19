@@ -163,6 +163,8 @@ def create_app(cfg=None):
             program_columns = {c[1] for c in db.execute("PRAGMA table_info(programs)")}
             if "program_path" not in program_columns:
                 db.execute("ALTER TABLE programs ADD COLUMN program_path TEXT NOT NULL DEFAULT ''")
+            if "program_dirs" not in program_columns:
+                db.execute("ALTER TABLE programs ADD COLUMN program_dirs TEXT")
             if "skills" not in program_columns:
                 db.execute("ALTER TABLE programs ADD COLUMN skills TEXT NOT NULL DEFAULT '[]'")
             for column in ("custom_title", "custom_subtitle", "skills"):
@@ -346,10 +348,17 @@ def create_app(cfg=None):
             abort(403)
         return jsonify(sorted(skill_catalog()))
 
-    def case_permissions(names, folder):
+    def case_permissions(names, folder, program_dirs):
         rules = [{"permission": "*", "pattern": "*", "action": "deny"}]
         for tool in ("read", "grep", "glob"):
             rules.append({"permission": tool, "pattern": "*", "action": "allow"})
+        for directory in dict.fromkeys(program_dirs):
+            path = Path(directory)
+            if (not path.is_absolute() or path == Path(path.anchor) or ".." in path.parts
+                    or any(char in directory for char in "*?[]\\")):
+                # A literal directory must never become a wildcard grant for unrelated paths.
+                continue
+            rules.append({"permission": "external_directory", "pattern": str(path / "*"), "action": "allow"})
         if names:
             registered = skill_catalog()
             visible = skill_catalog(folder)
@@ -402,7 +411,7 @@ def create_app(cfg=None):
     @route("/api/programs", methods=["GET","POST"])
     def programs():
         if request.method == "GET":
-            fields = "*" if g.user["admin"] else "name"
+            fields = "name,repo,branch,entry,skills,program_path" if g.user["admin"] else "name"
             rows = [dict(r) for r in db().execute("SELECT "+fields+" FROM programs ORDER BY name")]
             if g.user["admin"]:
                 for row in rows:
@@ -453,16 +462,19 @@ def create_app(cfg=None):
                     abort(400, "程式路徑必須是包含檔名的絕對路徑。")
                 try:
                     mode = os.stat(program_path).st_mode
+                    path = Path(program_path)
+                    # Pin the deployment directories at registration, even if the entry point is a symlink.
+                    program_dirs = [str(path.parent.resolve(strict=True)), str(path.resolve(strict=True).parent)]
                 except (FileNotFoundError, NotADirectoryError):
                     abort(400, f"找不到程式檔案，請確認完整路徑：{program_path}")
-                except (OSError, ValueError):
+                except (OSError, RuntimeError, ValueError):
                     abort(400, f"服務無法確認程式檔案，請檢查路徑與存取權限：{program_path}")
                 if not stat.S_ISREG(mode):
                     abort(400, f"程式路徑必須指向一般檔案：{program_path}")
                 if old is not None and not db().execute("DELETE FROM programs WHERE name=?", (old,)).rowcount:
                     abort(404)
-                db().execute("INSERT INTO programs(name,repo,branch,entry,skills,program_path) VALUES(?,?,?,?,?,?)",
-                             (name,repo,branch,entry,skills or "[]",program_path))
+                db().execute("INSERT INTO programs(name,repo,branch,entry,skills,program_path,program_dirs) VALUES(?,?,?,?,?,?,?)",
+                             (name,repo,branch,entry,skills or "[]",program_path,json.dumps(program_dirs)))
         except sqlite3.IntegrityError:
             abort(409,"此程式已存在。")
         return "",204
@@ -521,15 +533,21 @@ def create_app(cfg=None):
                 (g.user["id"], g.user["admin"]))])
         body,image = content()
         program = request.form.get("program","")
-        mapping = db().execute("SELECT repo,branch,entry,skills FROM programs WHERE name=?",(program,)).fetchone()
+        mapping = db().execute("SELECT repo,branch,entry,skills,program_path,program_dirs FROM programs WHERE name=?",(program,)).fetchone()
         if not mapping:
             abort(400,"請先選取已登錄的程式。")
         logger.info("Collecting run evidence program=%s", program)
         folder, logs = run_evidence(request.form.get("folder", ""))
-        permissions = case_permissions(json.loads(mapping["skills"]), folder)
+        program_path = mapping["program_path"]
+        # Older rows still grant access under the registered path.
+        program_dirs = [str(Path(program_path).parent)] if program_path else []
+        program_dirs.extend(json.loads(mapping["program_dirs"] or "[]"))
+        permissions = case_permissions(json.loads(mapping["skills"]), folder, program_dirs)
         with case_workspace(folder) as (workspace, handle):
             revision = ""
             evidence = "本案程式：" + program + "\n執行目錄：" + str(folder)
+            if program_path:
+                evidence += "\n實際程式路徑：" + program_path
             if mapping["repo"]:
                 logger.info("Syncing Gitea repository=%s branch=%s", mapping["repo"], mapping["branch"])
                 revision, source = source_context(state, base, mapping[:3], program, handle, token=repository_token)

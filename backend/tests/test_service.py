@@ -106,9 +106,43 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(create.status_code, 201)
         cid = "cases/" + str(create.json["id"])
         self.assertEqual(self.api("POST", cid + "/turn").status_code, 204)
-        self.assertIn(str(self.run), remote.call_args_list[1].args[2]["parts"][0]["text"])
+        prompt = remote.call_args_list[1].args[2]["parts"][0]["text"]
+        self.assertIn(str(self.run), prompt)
+        self.assertIn("實際程式路徑：" + str(self.program_file), prompt)
         self.assertEqual(self.api("GET", cid).json["revision"], "")
         source.assert_not_called()
+
+    @patch("app.remote", return_value={"id": "session"})
+    def test_deployment_directory_rules(self, remote):
+        bindir = self.root / "tools" / "bin"
+        (bindir / "lib").mkdir(parents=True)
+        entry = bindir / "demo"
+        release = self.root / "release"
+        release.mkdir()
+        (release / "demo").touch()
+        entry.symlink_to(release / "demo")
+        self.user(admin=True)
+        self.assertEqual(self.api("POST", "programs", json=dict(name="demo", program_path=str(entry))).status_code, 204)
+        other = self.root / "unrelated"
+        other.mkdir()
+        target = other / "new"
+        target.touch()
+        entry.unlink()
+        entry.symlink_to(target)
+        self.user()
+        form = dict(program="demo", folder=str(self.run), text="check")
+        self.assertEqual(self.api("POST", "cases", data=form).status_code, 201)
+        rules = remote.call_args.args[2]["permission"]
+        self.assertEqual(rules[0], {"permission": "*", "pattern": "*", "action": "deny"})
+        allowed = [r["pattern"] for r in rules if r["permission"] == "external_directory" and r["action"] == "allow"]
+        self.assertEqual(allowed, [str(bindir / "*"), str(release / "*")])
+
+        # Pre-upgrade registrations only grant their recorded directory.
+        with sqlite3.connect(self.root / "state/cases.sqlite") as db:
+            db.execute("UPDATE programs SET program_dirs=NULL WHERE name='demo'")
+        self.assertEqual(self.api("POST", "cases", data=form).status_code, 201)
+        self.assertEqual([r["pattern"] for r in remote.call_args.args[2]["permission"]
+                          if r["permission"] == "external_directory"], [str(bindir / "*")])
 
     def test_program_path_round_trip(self):
         self.user(admin=True)
@@ -270,7 +304,7 @@ class ServiceTests(unittest.TestCase):
         rules = remote.call_args.args[2]["permission"]
         self.assertEqual(rules, [{"permission": "*", "pattern": "*", "action": "deny"}] + [
             {"permission": key, "pattern": pattern, "action": "allow"} for key, pattern in
-            [("read", "*"), ("grep", "*"), ("glob", "*"), ("skill", "sample"),
+            [("read", "*"), ("grep", "*"), ("glob", "*"), ("external_directory", str(self.program_file.parent / "*")), ("skill", "sample"),
              ("external_directory", "/srv/skills/sample/*")]])
         remote.side_effect = [{"parts": [{"type": "text", "text": "OK"}]}, {"title": "OK"}]
         self.assertEqual(self.api("POST", "cases/%s/turn" % created.json["id"]).status_code, 204)
