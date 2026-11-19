@@ -28,7 +28,7 @@ function Login() {
       <p className="login-label"><span aria-hidden="true" />AI 查案助手</p>
       <h1 id="login-title">城堡還在走，<br /><em>哪裡鬆了？</em></h1>
       <p className="login-intro">程式跑起來怪怪的？描述你看到的現象，或貼上截圖。查案助手會陪你循著線索，一步步找出原因。</p>
-      <a className="login-button" href="auth/login">使用 Gitea 登入<span aria-hidden="true">→</span></a>
+      <a className="login-button" href={'auth/login' + location.search}>使用 Gitea 登入<span aria-hidden="true">→</span></a>
     </div>
     <div className="login-art" role="img" aria-label="拼著鐵板與老屋的移動城堡正邁步穿過草地，路旁站著一個小稻草人。" />
   </div></section>;
@@ -52,7 +52,7 @@ function ThinkingText({ text }) {
   </div>;
 }
 
-function Thread({ thread, thinking, busy, retry, reply, refresh, onError }) {
+function Thread({ thread, thinking, busy, retry, reply, remove, refresh, onError }) {
   const [heroOpen, setHeroOpen] = useState(true);
   const [replyOpen, setReplyOpen] = useState(() => window.innerWidth > 760);
   const log = useRef(null);
@@ -100,17 +100,20 @@ function Thread({ thread, thinking, busy, retry, reply, refresh, onError }) {
         <strong>{m.author === '@agent' ? '查案助理' : m.author}</strong><ThinkingText text={m.reasoning} />{m.author === '@agent' ? <div className="message-body"><Markdown text={m.body} /></div> : <p className="message-body">{m.body}</p>}
         {m.image && <img src={m.image} alt="案件附件" />}
       </div>)}</div>
-    {(thinking || activity) && <div id="thinking" role="status"><img src={hoppingScarecrow} width="56" height="56" alt="" />查案助手正在調查… <button type="button" disabled={!activity || stopping} onClick={stop}>{stopping ? '正在終止…' : '終止查案'}</button></div>}
+    {(thinking || activity) && <div id="thinking" role="status"><img src={hoppingScarecrow} width="56" height="56" alt="" />查案助手正在調查… {thread.can_reply && <button type="button" disabled={!activity || stopping} onClick={stop}>{stopping ? '正在終止…' : '終止查案'}</button>}</div>}
     {(thinking || activity) && <ThinkingText key={activity} text={reasoning} />}
     </div>
-    <aside className="reply-panel" aria-label="回覆案件">
+    {thread.can_reply && <aside className="reply-panel" aria-label="回覆案件">
       <button aria-expanded={replyOpen} aria-controls="reply-content" onClick={() => setReplyOpen(!replyOpen)}>{replyOpen ? '收合回覆 ›' : '‹ 回覆'}</button>
       <div id="reply-content" hidden={!replyOpen}>
       {pending
       ? <button id="retry" disabled={busy || !!activity} onClick={retry}>重新取得回覆</button>
       : <MessageForm busy={busy} onSend={reply} onError={onError} />}
+      <button className="delete-case" disabled={busy || !!activity || thinking} onClick={() => {
+        if (window.confirm('確定刪除「' + (thread.session_title || thread.program) + '」的整段案件對話？刪除後，所有人都無法再透過分享網址查看。')) remove();
+      }}>刪除案件對話</button>
       </div>
-    </aside>
+    </aside>}
   </section>;
 }
 
@@ -150,8 +153,18 @@ function App() {
     }
   }
 
-  async function openCase(id) {
+  function setCaseUrl(id, replace = false) {
+    const url = new URL(location.href);
+    if (id == null) url.searchParams.delete('case');
+    else url.searchParams.set('case', String(id));
+    if (url.href !== location.href) {
+      history[replace ? 'replaceState' : 'pushState'](null, '', url);
+    }
+  }
+
+  async function openCase(id, replace = false) {
     const data = await api('cases/' + id);
+    setCaseUrl(id, replace);
     setThread({ ...data, id });
     setCases(list => list.map(c => c.id === id ? { ...c, session_title: data.session_title } : c));
     setView('thread');
@@ -164,8 +177,16 @@ function App() {
       setCases(list);
       setPrograms(mappings);
       setUser(me);
-      if (list.length) await openCase(list[0].id);
+      const requested = new URLSearchParams(location.search).get('case');
+      if (requested !== null) {
+        const selected = list.find(item => String(item.id) === requested);
+        if (!selected) throw new Error('找不到此案件，請確認分享網址。');
+        await openCase(selected.id, true);
+      } else if (list.length) await openCase(list[0].id, true);
     });
+    const restorePage = () => location.reload();
+    window.addEventListener('popstate', restorePage);
+    return () => window.removeEventListener('popstate', restorePage);
   }, []);
 
   async function turn(id, body) {
@@ -184,8 +205,18 @@ function App() {
     });
   }
 
+  function deleteCase(id) {
+    return act(async () => {
+      await api('cases/' + id, { method: 'DELETE' });
+      setCases(list => list.filter(item => item.id !== id));
+      setThread(null);
+      setView('intake');
+      setCaseUrl(null, true);
+    });
+  }
+
   function switchView(next) {
-    return act(async () => { setPrograms(await api('programs')); setView(next); });
+    return act(async () => { setPrograms(await api('programs')); setCaseUrl(null); setView(next); });
   }
 
   function openModelSettings() {
@@ -195,6 +226,7 @@ function App() {
       setChoice('');
       setModels([]);
       setCatalogStatus('正在讀取 OpenCode 模型清單…');
+      setCaseUrl(null);
       setView('model');
       try {
         const list = await api('admin/models');
@@ -279,7 +311,7 @@ function App() {
           <MessageForm programs={programs} busy={busy} onSend={createCase} onError={setStatus} />
         </section>
         {view === 'thread' && thread && <Thread key={thread.id} thread={thread} thinking={thinking} busy={busy}
-          refresh={() => openCase(thread.id)} retry={() => act(() => turn(thread.id))} reply={data => act(() => turn(thread.id, data))} onError={setStatus} />}
+          remove={() => deleteCase(thread.id)} refresh={() => openCase(thread.id)} retry={() => act(() => turn(thread.id))} reply={data => act(() => turn(thread.id, data))} onError={setStatus} />}
         {view === 'admin' && user.admin && <section id="admin"><Hero label="管理員" title="程式索引" />
           <ProgramIndex programs={programs} busy={busy}
             save={(name, values) => changeProgram(name, { method: name ? 'PUT' : 'POST',

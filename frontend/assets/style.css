@@ -296,3 +296,5 @@ body:has(#login:not([hidden])) header {
   .reply-panel:has(#reply-content:not([hidden])) { position: absolute; right: 0; top: 0; width: min(300px, 82vw); max-height: 65vh; z-index: 1; }
   .case-panel > button[aria-expanded] { grid-column: 1 / -1; }
 }
+
+.delete-case { margin-top: 16px; color: var(--brick); }

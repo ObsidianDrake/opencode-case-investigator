@@ -43,7 +43,7 @@ export default function MessageForm({ programs, busy, onSend, onError }) {
         <select name="program" required>{programs.map(p => <option key={p.name}>{p.name}</option>)}</select>
       </label>
       <label>程式執行位置 <small>必填</small>
-        <input name="folder" placeholder="執行程式時所在的資料夾" required />
+        <input name="folder" placeholder="執行目錄絕對路徑（需有群組寫入權限）" required />
       </label>
       <label htmlFor="description">遇到什麼狀況 <small>必填</small></label>
     </>}

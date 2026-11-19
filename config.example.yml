@@ -4,7 +4,7 @@ server:
   prefix: "/case-investigator"
   bind_host: "127.0.0.1"
   port: 8000
-  state_dir: "/var/lib/case-investigator"         # 案件、快照、Git 快取及 session 簽章金鑰
+  state_dir: "/var/lib/case-investigator"         # 案件資料庫、執行鎖及 session 簽章金鑰
 
 logging:
   # directory: "/var/log/case-investigator"  # 預設為 server.state_dir 下的 logs

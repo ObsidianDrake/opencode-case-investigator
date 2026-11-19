@@ -1,5 +1,6 @@
 import io
 import re
+import sqlite3
 import subprocess
 import tempfile
 import threading
@@ -7,9 +8,10 @@ from concurrent.futures import ThreadPoolExecutor
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 from app import create_app
-from evidence import source_context
+from evidence import case_workspace, source_context
 
 
 class ServiceTests(unittest.TestCase):
@@ -21,6 +23,7 @@ class ServiceTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.run = self.root / "shared" / "batch-run"
         self.run.mkdir(parents=True)
+        self.run.chmod(0o770)
         env = dict(CASE_STATE=str(self.root/"state"), CASE_PREFIX=self.prefix,
                    GITEA_BASE="gitea", PUBLIC_ORIGIN="public", GITEA_CLIENT_ID="id",
                    GITEA_CLIENT_SECRET="test", INTERNAL_DOMAINS="internal.invalid",
@@ -98,6 +101,16 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(self.api("GET","programs").json,[])
 
     @patch("app.remote")
+    def test_login_returns_to_shared_case(self, remote):
+        self.assertEqual(self.api("GET", "cases/42").status_code, 401)
+        self.client.get(self.prefix + "/auth/login?case=42")
+        with self.client.session_transaction(path=self.prefix+"/") as session:
+            state = session["state"]
+        remote.side_effect = [{"access_token":"test"}, {"id":2, "login":"bob", "email":"bob@internal.invalid"}]
+        result = self.client.get(self.prefix+"/auth/callback", query_string={"code":"test", "state":state})
+        self.assertEqual(result.location, self.prefix+"/?case=42")
+
+    @patch("app.remote")
     def test_external_denied_even_if_admin(self,remote):
         self.client.get(self.prefix+"/auth/login")
         with self.client.session_transaction(path=self.prefix+"/") as s:
@@ -115,6 +128,14 @@ class ServiceTests(unittest.TestCase):
             with self.subTest(path=path):
                 response = self.api("POST", "cases", data=dict(text="失敗", program="demo", folder=path))
                 self.assertEqual(response.status_code, 400)
+        self.run.chmod(0o750)
+        response = self.api("POST", "cases", data=dict(text="失敗", program="demo", folder=str(self.run)))
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("g+w", response.json["error"])
+        self.run.chmod(0o770)
+        (self.run / ".opencode-tmp").symlink_to(self.root)
+        self.assertEqual(self.api("POST", "cases", data=dict(text="失敗", program="demo", folder=str(self.run))).status_code, 400)
+        (self.run / ".opencode-tmp").unlink()
         for operation in ("scandir", "stat"):
             with self.subTest(operation=operation):
                 # Simulate denial while listing or traversing, even when tests run as root.
@@ -159,7 +180,14 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(self.api("GET","cases").json[0]["session_title"],"輸入資料異常")
         self.assertEqual(self.api("GET",cid).json["session_title"],"輸入資料異常")
         self.user(2)
-        self.assertEqual(self.api("GET",cid).status_code,404)
+        self.assertEqual(self.api("GET","cases").json[0]["id"], create.json["id"])
+        shared = self.api("GET",cid)
+        self.assertEqual(shared.status_code, 200)
+        self.assertFalse(shared.json["can_reply"])
+        self.assertEqual(len(shared.json["messages"]), 2)
+        self.assertEqual(self.api("DELETE", cid).status_code, 403)
+        for form in ({}, {"text": "追問"}):
+            self.assertEqual(self.api("POST", cid+"/turn", data=form).status_code, 403)
         self.user(2,True)
         self.assertEqual(self.api("PUT", "admin/model", json={"model":"gateway/next/vision"}).status_code, 200)
         jpeg = b"\xff\xd8\xfftest"
@@ -178,6 +206,7 @@ class ServiceTests(unittest.TestCase):
         started, stopped = threading.Event(), threading.Event()
         sent = {}
         def upstream(operation, url, *args, **kwargs):
+            self.assertEqual(parse_qs(urlsplit(url).query)["directory"], [str(self.run)])
             if "/message?" in url and args[0] is None:
                 return [{"info": {"id": "old", "parentID": "previous"}, "parts": [{"type": "reasoning", "text": "old"}]},
                         {"info": {"id": "current", "parentID": sent["id"]}, "parts": [{"type": "reasoning", "text": "checking logs"}]}]
@@ -200,10 +229,11 @@ class ServiceTests(unittest.TestCase):
             turn = pool.submit(self.api, "POST", path + "/turn")
             self.assertTrue(started.wait(5))
             self.assertEqual(self.api("GET", path + "/activity?reasoning=1").json["reasoning"], "checking logs")
+            self.assertEqual(self.api("DELETE", path).status_code, 409)
             token = self.api("GET", path + "/activity").json
             self.assertEqual(self.api("POST", path + "/abort", data=dict(turn_id="stale")).status_code, 409)
             self.user(2)
-            self.assertEqual(self.api("POST", path + "/abort", data=token).status_code, 404)
+            self.assertEqual(self.api("POST", path + "/abort", data=token).status_code, 403)
             self.user(2, True)
             self.assertEqual(self.api("POST", path + "/abort", data=token).status_code, 204)
             self.assertEqual(turn.result().status_code, 204)
@@ -212,7 +242,59 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(detail["messages"][-1]["reasoning"], "checking logs")
         self.assertIn("終止", detail["messages"][-1]["body"])
 
-    def test_refresh_repository_without_checkout(self):
+    @patch("app.source_context", return_value=("revision", "source"))
+    @patch("app.remote", return_value={"id":"session"})
+    def test_delete_case_as_owner_and_admin(self, remote, source):
+        self.mapping()
+        form = dict(text="test", program="demo", folder=str(self.run))
+        ids = []
+        for admin in (False, True):
+            self.user()
+            cid = self.api("POST", "cases", data=form).json["id"]
+            ids.append(cid)
+            if admin:
+                self.user(2, True)
+            path = "cases/%d" % cid
+            self.assertEqual(self.api("DELETE", path).status_code, 204)
+            self.assertEqual(self.api("GET", path).status_code, 404)
+            self.assertEqual(self.api("GET", "cases").json, [])
+        self.assertGreater(ids[1], ids[0])
+        with sqlite3.connect(self.root/"state"/"cases.sqlite") as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM messages").fetchone()[0], 0)
+
+    def test_upgrade_preserves_existing_shared_case_ids(self):
+        self.mapping()
+        with sqlite3.connect(self.root/"state"/"cases.sqlite") as db:
+            db.execute("DROP TABLE cases")
+            db.execute("""CREATE TABLE cases(id INTEGER PRIMARY KEY,owner INTEGER,author TEXT,
+                       program TEXT,folder TEXT,summary TEXT,revision TEXT,sid TEXT,evidence TEXT,
+                       workspace TEXT,session_title TEXT)""")
+            db.execute("INSERT INTO cases(id,owner,session_title) VALUES(42,1,'原案件')")
+        self.client = create_app(self.env).test_client()
+        self.user(2)
+        result = self.api("GET", "cases/42")
+        self.assertEqual(result.json["session_title"], "原案件")
+        self.assertFalse(result.json["can_reply"])
+        self.user()
+        self.assertEqual(self.api("DELETE","cases/42").status_code, 204)
+        with sqlite3.connect(self.root/"state"/"cases.sqlite") as db:
+            self.assertGreater(db.execute("INSERT INTO cases(owner) VALUES(1)").lastrowid, 42)
+
+    @patch("app.remote")
+    def test_legacy_session_keeps_original_directory(self, remote):
+        self.user()
+        snapshot = self.root / "state" / "snapshot-old"
+        snapshot.mkdir()
+        with sqlite3.connect(self.root / "state" / "cases.sqlite") as db:
+            cid = db.execute("INSERT INTO cases(owner,folder,workspace,sid,evidence) VALUES(?,?,?,?,?)",
+                             (1, str(self.run), str(snapshot), "old", "legacy")).lastrowid
+            db.execute("INSERT INTO messages(cid,author,body) VALUES(?,?,?)", (cid, "alice", "retry"))
+        remote.side_effect = [{"parts": [{"type": "text", "text": "ok"}]}, {"title": "old case"}]
+        self.assertEqual(self.api("POST", "cases/%d/turn" % cid).status_code, 204)
+        for call in remote.call_args_list:
+            self.assertEqual(parse_qs(urlsplit(call.args[1]).query)["directory"], [str(snapshot)])
+
+    def test_clone_pins_each_case_revision(self):
         repo = self.root/"repos"/"samples"/"demo.git"
         repo.mkdir(parents=True)
         def git(*args):
@@ -223,12 +305,15 @@ class ServiceTests(unittest.TestCase):
             (repo/"demo").write_text(value)
             git("add","demo")
             git("-c","user.name=Test","-c","user.email=test@invalid","commit","-m",value)
-            snap = self.root / ("snapshot-" + value)
             (repo/"helper.py").write_text(value)
             git("add","helper.py")
             git("-c","user.name=Test","-c","user.email=test@invalid","commit","-m","Add helper")
-            rev, text = source_context(self.root/"cache",str(self.root/"repos"),("samples/demo","main",""),"demo",snap)
-            self.assertEqual((snap/"source"/"helper.py.txt").read_text(),value)
+            with case_workspace(self.run) as (snap, handle):
+                rev, text = source_context(self.root, str(self.root/"repos"),
+                                           ("samples/demo","main",""), "demo", handle)
+                self.assertEqual(snap.parent, self.run / ".opencode-tmp")
+                self.assertTrue((snap/"source"/".git").is_dir())
+            self.assertEqual((snap/"source"/"helper.py").read_text(),value)
             self.assertIn(value,text)
             revisions.append(rev)
         self.assertNotEqual(*revisions)
