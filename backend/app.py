@@ -7,6 +7,7 @@ import re
 import secrets
 import socket
 import sqlite3
+import stat
 import sys
 import threading
 import uuid
@@ -417,6 +418,16 @@ def create_app(cfg=None):
                             program_path = previous["program_path"]
                 if not program_path.strip():
                     abort(400, "請填寫程式路徑。")
+                if not os.path.isabs(program_path):
+                    abort(400, "程式路徑必須是包含檔名的絕對路徑。")
+                try:
+                    mode = os.stat(program_path).st_mode
+                except (FileNotFoundError, NotADirectoryError):
+                    abort(400, f"找不到程式檔案，請確認完整路徑：{program_path}")
+                except (OSError, ValueError):
+                    abort(400, f"服務無法確認程式檔案，請檢查路徑與存取權限：{program_path}")
+                if not stat.S_ISREG(mode):
+                    abort(400, f"程式路徑必須指向一般檔案：{program_path}")
                 if old is not None and not db().execute("DELETE FROM programs WHERE name=?", (old,)).rowcount:
                     abort(404)
                 db().execute("INSERT INTO programs(name,repo,branch,entry,skills,program_path) VALUES(?,?,?,?,?,?)",

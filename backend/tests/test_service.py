@@ -21,6 +21,8 @@ class ServiceTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        self.program_file = self.root / "demo.py"
+        self.program_file.write_text("print(1)")
         self.run = self.root / "shared" / "batch-run"
         self.run.mkdir(parents=True)
         self.run.chmod(0o770)
@@ -41,7 +43,7 @@ class ServiceTests(unittest.TestCase):
 
     def mapping(self):
         self.user(admin=True)
-        data = dict(name="demo",program_path="/opt/demo/bin/",repo="samples/demo",branch="main",entry="demo.py")
+        data = dict(name="demo",program_path=str(self.program_file),repo="samples/demo",branch="main",entry="demo.py")
         self.assertEqual(self.api("POST","programs",json=data).status_code,204)
 
     @patch("app.remote")
@@ -63,8 +65,8 @@ class ServiceTests(unittest.TestCase):
     def test_repository_optional_for_investigation(self, source, remote):
         self.user(admin=True)
         self.assertEqual(self.api("POST", "programs", json={"name": ""}).status_code, 400)
-        self.assertEqual(self.api("POST", "programs", json={"name": "demo", "program_path": "/opt/demo/bin/", "repo": "tools/demo"}).status_code, 400)
-        self.assertEqual(self.api("POST", "programs", json={"name": "demo", "program_path": "/opt/demo/bin/"}).status_code, 204)
+        self.assertEqual(self.api("POST", "programs", json={"name": "demo", "program_path": str(self.program_file), "repo": "tools/demo"}).status_code, 400)
+        self.assertEqual(self.api("POST", "programs", json={"name": "demo", "program_path": str(self.program_file)}).status_code, 204)
         self.user()
         remote.side_effect = [{"id": "session"}, {"parts": [{"type": "text", "text": "OK"}]}, {"title": "Demo"}]
         create = self.api("POST", "cases", data=dict(text="check", program="demo", folder=str(self.run)))
@@ -81,13 +83,29 @@ class ServiceTests(unittest.TestCase):
             result = self.api("POST", "programs", json=dict(name="demo", **fields))
             self.assertEqual(result.status_code, 400)
             self.assertIn("程式路徑", result.json["error"])
-        data = dict(name="demo", program_path="/opt/demo/bin/")
+        data = dict(name="demo", program_path=str(self.program_file))
         self.assertEqual(self.api("POST", "programs", json=data).status_code, 204)
         self.assertEqual(self.api("GET", "programs").json[0]["program_path"], data["program_path"])
         self.assertEqual(self.api("PUT", "programs/demo", json=dict(name="demo")).status_code, 204)
         self.assertEqual(self.api("GET", "programs").json[0]["program_path"], data["program_path"])
         self.assertEqual(self.api("PUT", "programs/demo", json=dict(name="demo", program_path="")).status_code, 400)
         self.assertEqual(self.api("GET", "programs").json[0]["program_path"], data["program_path"])
+
+    def test_validate_program_file_before_save(self):
+        self.user(admin=True)
+        link = self.root / "deployed"
+        link.symlink_to(self.program_file)
+        data = dict(name="demo", program_path=str(link))
+        self.assertEqual(self.api("POST", "programs", json=data).status_code, 204)
+        for path in ("demo.py", str(self.root), str(self.root / "missing"), str(self.program_file) + "/"):
+            with self.subTest(path=path):
+                edit = dict(name="changed", program_path=path)
+                self.assertEqual(self.api("PUT", "programs/demo", json=edit).status_code, 400)
+                self.assertEqual(self.api("POST", "programs", json=edit).status_code, 400)
+        self.program_file.unlink()
+        self.assertEqual(self.api("PUT", "programs/demo", json={"name": "changed"}).status_code, 400)
+        rows = self.api("GET", "programs").json
+        self.assertEqual([(row["name"], row["program_path"]) for row in rows], [("demo", str(link))])
 
     def test_routes_and_roles(self):
         self.assertEqual(self.client.get(self.prefix).status_code,302)
@@ -141,7 +159,7 @@ class ServiceTests(unittest.TestCase):
         self.mapping()
         update = dict(name="renamed",repo="samples/demo",branch="master",entry="main.py")
         self.assertEqual(self.api("PUT","programs/demo",json=update).status_code,204)
-        self.assertEqual(self.api("GET","programs").json,[dict(update, skills=[], program_path="/opt/demo/bin/")])
+        self.assertEqual(self.api("GET","programs").json,[dict(update, skills=[], program_path=str(self.program_file))])
         self.assertEqual(self.api("DELETE","programs/renamed").status_code,204)
         self.assertEqual(self.api("GET","programs").json,[])
 

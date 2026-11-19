@@ -45,7 +45,7 @@ export default function ProgramIndex({ programs, busy, save, remove, loadSkills,
     </div>)}</div>
     <form id="mapping" key={editing?.name || ''} onSubmit={submit} onReset={() => edit(null)}>
       <label>程式名稱（必填）<input name="name" defaultValue={editing?.name} required /></label>
-      <label>程式路徑（必填）<input name="program_path" required pattern=".*\S.*" placeholder="/twhome/techfile/bin/" defaultValue={editing?.program_path || ''} /></label>
+      <label>程式路徑（必填，含檔名的絕對路徑）<input name="program_path" required pattern=".*\S.*" placeholder="/twhome/techfile/bin/" defaultValue={editing?.program_path || ''} /></label>
       <RepositoryPicker key={pickerKey} value={repo} onChange={setRepo} searchRepos={searchRepos} />
       {repo && <div key={repo}>
         <label>分支（必填）<select name="branch" required defaultValue={repo === editing?.repo ? editing.branch : ''}>
