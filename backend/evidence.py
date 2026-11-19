@@ -2,6 +2,7 @@
 import logging
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -13,6 +14,12 @@ from werkzeug.exceptions import BadRequest, Forbidden, ServiceUnavailable
 
 REPOSITORY = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*/[A-Za-z0-9_-][A-Za-z0-9_.-]*")
 PROGRAM = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.+-]{0,127}")
+
+
+def require_group_write(folder, mode):
+    if not mode & stat.S_IWGRP:
+        command = "chmod 775 " + shlex.quote(str(folder))
+        raise Forbidden(f"run root 缺少群組寫入權限，請執行「{command}」後重新送出案件。")
 
 
 def run_evidence(raw):
@@ -32,14 +39,17 @@ def run_evidence(raw):
 def log_context(folder):
     pieces = []
     # Anchor reads to the open directory and reject links and special files.
-    fd = os.open(folder, os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        fd = os.open(folder, os.O_DIRECTORY | os.O_NOFOLLOW)
+    except PermissionError:
+        require_group_write(folder, folder.stat().st_mode)
+        raise
     try:
         if Path(os.readlink("/proc/self/fd/%d" % fd)) != folder:
             raise BadRequest("執行位置已變更，請重新選取。")
+        require_group_write(folder, os.fstat(fd).st_mode)
         # Looking up "." also checks search (execute) access on an empty directory.
         os.stat(".", dir_fd=fd)
-        if not os.fstat(fd).st_mode & stat.S_IWGRP:
-            raise Forbidden("程式執行位置需要群組寫入權限（g+w），請調整後再送出。")
         if not os.access(folder, os.W_OK | os.X_OK):
             raise Forbidden("查案服務帳號無法寫入程式執行位置，請確認資料夾權限。")
         with os.scandir(fd) as entries:

@@ -153,6 +153,11 @@ def create_app(cfg=None):
                 db.execute(f"INSERT INTO cases({columns}) SELECT {columns} FROM cases_before_share_links")
                 db.execute("DROP TABLE cases_before_share_links")
 
+            existing = {c[1] for c in db.execute("PRAGMA table_info(cases)")}
+            for column in ("custom_title", "custom_subtitle"):
+                if column not in existing:
+                    db.execute(f"ALTER TABLE cases ADD COLUMN {column} TEXT")
+
     def db():
         if "db" not in g:
             g.db = sqlite3.connect(state / "cases.sqlite", timeout=10)
@@ -369,7 +374,8 @@ def create_app(cfg=None):
     def cases():
         if request.method == "GET":
             return jsonify([dict(r) for r in db().execute(
-                "SELECT id,author,program,summary,session_title FROM cases ORDER BY id DESC")])
+                "SELECT id,author,program,summary,session_title,custom_title,custom_subtitle,(owner=? OR ?) AS can_manage FROM cases ORDER BY id DESC",
+                (g.user["id"], g.user["admin"]))])
         body,image = content()
         program = request.form.get("program","")
         mapping = db().execute("SELECT repo,branch,entry FROM programs WHERE name=?",(program,)).fetchone()
@@ -469,7 +475,7 @@ def create_app(cfg=None):
             title = session_title(row)
         with turns_lock:
             turn_id = active_turns.get(cid, {}).get("id")
-        return jsonify(can_reply=can_manage_case(row),active_turn=turn_id,program=row["program"],session_title=title,folder=row["folder"],revision=row["revision"],messages=messages)
+        return jsonify(custom_title=row["custom_title"], custom_subtitle=row["custom_subtitle"], can_reply=can_manage_case(row),active_turn=turn_id,program=row["program"],session_title=title,folder=row["folder"],revision=row["revision"],messages=messages)
 
     @contextmanager
     def locked_case(cid):
@@ -480,6 +486,20 @@ def create_app(cfg=None):
             except BlockingIOError:
                 abort(409, "此案件正在調查中，請等候本回合結束。")
             yield case(cid, write=True)
+
+    @route("/api/cases/<int:cid>", methods=["PATCH"])
+    def rename_case(cid):
+        case(cid, write=True)
+        fields = request.get_json()
+        if not isinstance(fields, dict) or any(not isinstance(fields.get(k), str)
+                or len(fields[k]) > 200 for k in ("custom_title", "custom_subtitle")):
+            abort(400, "請填寫主標題與副標題，每欄最多 200 字。")
+        names = {key: fields[key].strip() or None for key in ("custom_title", "custom_subtitle")}
+        with db():
+            if not db().execute("UPDATE cases SET custom_title=?, custom_subtitle=? WHERE id=?",
+                                (names["custom_title"], names["custom_subtitle"], cid)).rowcount:
+                abort(404, "找不到此案件。")
+        return jsonify(names)
 
     @route("/api/cases/<int:cid>", methods=["DELETE"])
     def delete_case(cid):

@@ -131,7 +131,13 @@ class ServiceTests(unittest.TestCase):
         self.run.chmod(0o750)
         response = self.api("POST", "cases", data=dict(text="失敗", program="demo", folder=str(self.run)))
         self.assertEqual(response.status_code, 403)
-        self.assertIn("g+w", response.json["error"])
+        self.assertIn("chmod 775 " + str(self.run), response.json["error"])
+        private = self.run / "private run"
+        private.mkdir(mode=0o700)
+        with patch("evidence.os.open", side_effect=PermissionError()):
+            response = self.api("POST", "cases", data=dict(text="失敗", program="demo", folder=str(private)))
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("chmod 775 '" + str(private) + "'", response.json["error"])
         self.run.chmod(0o770)
         (self.run / ".opencode-tmp").symlink_to(self.root)
         self.assertEqual(self.api("POST", "cases", data=dict(text="失敗", program="demo", folder=str(self.run))).status_code, 400)
@@ -261,6 +267,27 @@ class ServiceTests(unittest.TestCase):
         self.assertGreater(ids[1], ids[0])
         with sqlite3.connect(self.root/"state"/"cases.sqlite") as db:
             self.assertEqual(db.execute("SELECT count(*) FROM messages").fetchone()[0], 0)
+
+    @patch("app.source_context", return_value=("revision", "source"))
+    @patch("app.remote", return_value={"id":"session"})
+    def test_rename_case_permissions_and_original_program(self, remote, source):
+        self.mapping()
+        self.user()
+        cid = self.api("POST", "cases", data=dict(text="test", program="demo", folder=str(self.run))).json["id"]
+        path = "cases/%d" % cid
+        names = dict(custom_title="標題", custom_subtitle="副標題")
+        self.assertEqual(self.api("PATCH", path, json=names).json, names)
+        self.user(2)
+        self.assertEqual(self.api("PATCH", path, json=names).status_code, 403)
+        item = self.api("GET", "cases").json[0]
+        self.assertFalse(item["can_manage"])
+        self.assertEqual(item["custom_title"], names["custom_title"])
+        detail = self.api("GET", path).json
+        self.assertEqual(detail["custom_subtitle"], names["custom_subtitle"])
+        self.assertEqual(detail["program"], "demo")
+        self.user(2, True)
+        result = self.api("PATCH", path, json=dict(custom_title="", custom_subtitle=""))
+        self.assertEqual(result.json, dict(custom_title=None, custom_subtitle=None))
 
     def test_upgrade_preserves_existing_shared_case_ids(self):
         self.mapping()

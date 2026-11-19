@@ -276,7 +276,10 @@ body:has(#login:not([hidden])) header {
 
 #case-controls:not([hidden]) { display: contents; }
 .thread-heading { position: relative; grid-area: heading; }
-.heading-toggle { position: absolute; top: 5px; right: 5px; }
+.heading-toggle { position: absolute; top: 50%; right: 5px; transform: translateY(-50%); }
+.panel-toggle { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; flex: none; }
+.case-panel .panel-toggle { align-self: flex-end; }
+.reply-panel .panel-toggle { align-self: flex-start; }
 .thread-heading .hero, .compact-title { padding-right: 55px; }
 .compact-title { margin: 0; padding-block: 10px; font-size: 18px; }
 #thread {
@@ -297,4 +300,36 @@ body:has(#login:not([hidden])) header {
   .case-panel > button[aria-expanded] { grid-column: 1 / -1; }
 }
 
-.delete-case { margin-top: 16px; color: var(--brick); }
+#reply-content:not([hidden]), #reply, #reply .draft {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+#reply textarea { flex: 1; min-height: 5rem; resize: none; }
+#reply .tools, #reply .draft-image { flex: none; }
+@media (max-width: 760px) {
+  .reply-panel:has(#reply-content:not([hidden])) { height: 65dvh; }
+}
+.case-row { position: relative; }
+.case-row:has(.case-actions) .case-link { padding-right: 42px; }
+.case-row .case-actions {
+  position: absolute; right: 4px; top: 4px; width: 34px; height: 32px;
+  display: grid; place-items: center; padding: 0; margin: 0;
+  opacity: 0; pointer-events: none; font-size: 20px;
+}
+.case-row:hover .case-actions, .case-row:focus-within .case-actions,
+.case-actions[aria-expanded=true] { opacity: 1; pointer-events: auto; }
+@media (hover: none) {
+  .case-row .case-actions { opacity: 1; pointer-events: auto; }
+}
+.case-menu {
+  position: fixed; z-index: 4; inset: auto; margin: 0; padding: 4px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--sheet);
+  box-shadow: 0 3px 12px #46351e33;
+}
+.case-menu button { margin: 0; }
+.case-menu button:last-child { color: var(--brick); }
+.rename-dialog { width: min(360px, 92vw); border: 1px solid var(--line); border-radius: 8px; background: var(--sheet); color: var(--ink); padding: 20px; }
+.rename-dialog h2 { margin-top: 0; }
+.rename-dialog form > div { text-align: right; }

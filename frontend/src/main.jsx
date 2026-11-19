@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import Markdown from './Markdown';
 import MessageForm from './MessageForm';
@@ -52,10 +52,68 @@ function ThinkingText({ text }) {
   </div>;
 }
 
-function Thread({ thread, thinking, busy, retry, reply, remove, refresh, onError }) {
+function caseTitle(c) { return c.custom_title || c.program; }
+function caseSubtitle(c) { return c.custom_subtitle || c.session_title || ''; }
+
+function RenameCase({ item, busy, save, close }) {
+  const dialog = useRef(null);
+  useEffect(() => { dialog.current.showModal(); }, []);
+  return <dialog className="rename-dialog" ref={dialog} onCancel={close} aria-label="重新命名對話">
+    <form onSubmit={event => {
+      event.preventDefault();
+      const values = Object.fromEntries(new FormData(event.currentTarget));
+      if (values.custom_title === item.program) values.custom_title = '';
+      if (values.custom_subtitle === item.session_title) values.custom_subtitle = '';
+      save(item.id, values);
+    }}>
+      <h2>重新命名對話</h2>
+      <label>主標題<input name="custom_title" defaultValue={caseTitle(item)} placeholder={item.program} maxLength={200} autoFocus /></label>
+      <label>副標題<input name="custom_subtitle" defaultValue={caseSubtitle(item)} placeholder={item.session_title || '對話名稱'} maxLength={200} /></label>
+      <p>留空會使用原本的標題。</p>
+      <div><button type="button" onClick={close}>取消</button> <button className="primary" disabled={busy}>儲存</button></div>
+    </form>
+  </dialog>;
+}
+
+function PanelToggle({ side, open, controls, label, onClick }) {
+  const description = (open ? '收合' : '展開') + label;
+  const pointsLeft = side === 'left' ? open : !open;
+  return <button type="button" className="panel-toggle" aria-label={description} title={description}
+    aria-controls={controls} aria-expanded={open} onClick={onClick}>
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+      strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2" y="4" width="20" height="16" rx="2" />
+      <path d={side === 'left' ? 'M8 4v16' : 'M16 4v16'} />
+      <g transform={side === 'left' ? 'translate(15 12)' : 'translate(9 12)'}>
+        <path d={pointsLeft ? 'M1.5 -3l-3 3 3 3' : 'M-1.5 -3l3 3 -3 3'} />
+      </g>
+    </svg>
+  </button>;
+}
+
+function Thread({ thread, thinking, busy, retry, reply, refresh, onError }) {
   const [heroOpen, setHeroOpen] = useState(true);
-  const [replyOpen, setReplyOpen] = useState(() => window.innerWidth > 760);
+  const running = Boolean(thinking || thread.active_turn);
+  const [idleReplyOpen, setIdleReplyOpen] = useState(() => window.innerWidth > 760);
+  const [runningReplyOpen, setRunningReplyOpen] = useState(false);
+  const replyOpen = running ? runningReplyOpen : idleReplyOpen;
+  useEffect(() => { if (!running) setRunningReplyOpen(false); }, [running]);
+  const manualHeading = useRef(false);
   const log = useRef(null);
+  useLayoutEffect(() => {
+    if (!heroOpen || manualHeading.current) return;
+    const messages = log.current;
+    const checkOverflow = () => {
+      if (!manualHeading.current && messages.clientHeight > 0 && messages.scrollHeight > messages.clientHeight) {
+        setHeroOpen(false);
+      }
+    };
+    checkOverflow();
+    const observer = new ResizeObserver(checkOverflow);
+    observer.observe(messages);
+    for (const message of messages.children) observer.observe(message);
+    return () => observer.disconnect();
+  }, [thread.messages, heroOpen]);
   useEffect(() => { log.current.scrollTop = log.current.scrollHeight; }, [thread]);
   const [activity, setActivity] = useState(thread.active_turn);
   const [reasoning, setReasoning] = useState('');
@@ -88,11 +146,11 @@ function Thread({ thread, thinking, busy, retry, reply, remove, refresh, onError
   const pending = thread.messages.at(-1)?.author !== '@agent';
   return <section id="thread">
     <div className="thread-heading">
-      <button className="heading-toggle" aria-label={heroOpen ? '收合案件標題' : '展開案件標題'} aria-expanded={heroOpen} onClick={() => setHeroOpen(!heroOpen)}>{heroOpen ? '⌃' : '⌄'}</button>
-      {heroOpen ? <Hero label="案件對話" title={thread.program}>
-      {thread.session_title && <p id="subtitle">{thread.session_title}</p>}
+      <button className="heading-toggle" aria-label={heroOpen ? '收合案件標題' : '展開案件標題'} aria-expanded={heroOpen} onClick={() => { manualHeading.current = true; setHeroOpen(!heroOpen); }}>{heroOpen ? '⌃' : '⌄'}</button>
+      {heroOpen ? <Hero label="案件對話" title={caseTitle(thread)}>
+      {caseSubtitle(thread) && <p id="subtitle">{caseSubtitle(thread)}</p>}
       <p id="meta" title={thread.folder + ' · ' + thread.revision}>{thread.folder} · {thread.revision.slice(0, 8)}</p>
-    </Hero> : <h1 className="compact-title">{thread.session_title?.trim() || thread.program}</h1>}
+    </Hero> : <h1 className="compact-title">{caseSubtitle(thread) || caseTitle(thread)}</h1>}
     </div>
     <div className="conversation">
     <div id="messages" ref={log} role="log" aria-label="案件對話紀錄">{thread.messages.map(m =>
@@ -104,14 +162,12 @@ function Thread({ thread, thinking, busy, retry, reply, remove, refresh, onError
     {(thinking || activity) && <ThinkingText key={activity} text={reasoning} />}
     </div>
     {thread.can_reply && <aside className="reply-panel" aria-label="回覆案件">
-      <button aria-expanded={replyOpen} aria-controls="reply-content" onClick={() => setReplyOpen(!replyOpen)}>{replyOpen ? '收合回覆 ›' : '‹ 回覆'}</button>
+      <PanelToggle side="right" open={replyOpen} controls="reply-content" label="回覆欄"
+        onClick={() => running ? setRunningReplyOpen(!replyOpen) : setIdleReplyOpen(!replyOpen)} />
       <div id="reply-content" hidden={!replyOpen}>
       {pending
       ? <button id="retry" disabled={busy || !!activity} onClick={retry}>重新取得回覆</button>
       : <MessageForm busy={busy} onSend={reply} onError={onError} />}
-      <button className="delete-case" disabled={busy || !!activity || thinking} onClick={() => {
-        if (window.confirm('確定刪除「' + (thread.session_title || thread.program) + '」的整段案件對話？刪除後，所有人都無法再透過分享網址查看。')) remove();
-      }}>刪除案件對話</button>
       </div>
     </aside>}
   </section>;
@@ -132,6 +188,31 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [thinking, setThinking] = useState(false);
   const [status, setStatus] = useState('');
+  const [menu, setMenu] = useState(null);
+  const [renaming, setRenaming] = useState(null);
+  useEffect(() => {
+    if (!menu) return;
+    const dismiss = event => {
+      if (!event.target.closest?.('.case-menu, .case-actions')) setMenu(null);
+    };
+    const escape = event => {
+      if (event.key === 'Escape') {
+        setMenu(null);
+        document.getElementById('actions-button-' + menu.id)?.focus();
+      }
+    };
+    const close = () => setMenu(null);
+    document.addEventListener('pointerdown', dismiss);
+    document.addEventListener('keydown', escape);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      document.removeEventListener('pointerdown', dismiss);
+      document.removeEventListener('keydown', escape);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [menu]);
   const locked = useRef(false);
 
   async function act(work) {
@@ -200,6 +281,7 @@ function App() {
     return act(async () => {
       const { id } = await api('cases', { method: 'POST', body: data });
       setCases(await api('cases'));
+      setCasesOpen(false);
       await openCase(id);
       await turn(id);
     });
@@ -209,9 +291,11 @@ function App() {
     return act(async () => {
       await api('cases/' + id, { method: 'DELETE' });
       setCases(list => list.filter(item => item.id !== id));
-      setThread(null);
-      setView('intake');
-      setCaseUrl(null, true);
+      if (view === 'thread' && thread?.id === id) {
+        setThread(null);
+        setView('intake');
+        setCaseUrl(null, true);
+      }
     });
   }
 
@@ -259,7 +343,7 @@ function App() {
   }
 
   const filter = query.trim().toLocaleLowerCase();
-  const visible = cases.filter(c => [c.program, c.session_title || ''].some(v => v.toLocaleLowerCase().includes(filter)));
+  const visible = cases.filter(c => [c.program, caseTitle(c), caseSubtitle(c)].some(v => v.toLocaleLowerCase().includes(filter)));
   return <>
     <header>
       <div className="brand"><img className="brandmark" src={scarecrow} alt="" /><strong>DRC查案助手</strong></div>
@@ -268,18 +352,44 @@ function App() {
         await api('logout', { method: 'POST' }); location.reload();
       })}>登出</button></>}
     </header>
+    {renaming && <RenameCase item={renaming} busy={busy} close={() => setRenaming(null)}
+      save={(id, values) => act(async () => {
+        const names = await api('cases/' + id, { method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values) });
+        setCases(list => list.map(c => c.id === id ? { ...c, ...names } : c));
+        setThread(c => c?.id === id ? { ...c, ...names } : c);
+        setRenaming(null);
+      })} />}
     <main><p id="status" role="status">{status}</p>
       {user === null && <Login />}
       {user && <div id="workspace" className={view === 'thread' && !casesOpen ? 'cases-closed' : ''}><aside className="case-panel">
-        {view === 'thread' && <button aria-expanded={casesOpen} aria-controls="case-controls" onClick={() => setCasesOpen(!casesOpen)}>{casesOpen ? '‹ 收合案件列表' : '案件 ›'}</button>}
+        {view === 'thread' && <PanelToggle side="left" open={casesOpen} controls="case-controls" label="案件列表"
+          onClick={() => setCasesOpen(!casesOpen)} />}
         <div id="case-controls" hidden={view === 'thread' && !casesOpen}>
         <button id="new" disabled={busy} onClick={() => switchView('intake')}>＋ 建立案件</button>
         <input id="case-search" type="search" aria-label="搜尋案件對話" placeholder="搜尋程式名稱或對話標題"
           value={query} onChange={e => setQuery(e.target.value)} />
-        <h2>案件對話</h2><nav id="cases">{visible.map(c => <button key={c.id} disabled={busy}
+        <h2>案件對話</h2><nav id="cases">{visible.map(c => <div className="case-row" key={c.id}><button className="case-link" disabled={busy}
           aria-current={view === 'thread' && thread?.id === c.id} onClick={() => act(() => openCase(c.id))}>
-          <strong>{c.program}</strong><span>{c.session_title}</span>
-        </button>)}</nav>
+          <strong>{caseTitle(c)}</strong><span>{caseSubtitle(c)}</span>
+        </button>
+        {!!c.can_manage && <>
+          <button className="case-actions" type="button" aria-label={'對話動作：' + (caseSubtitle(c) || caseTitle(c))}
+            title="對話動作" disabled={busy} id={'actions-button-' + c.id} aria-expanded={menu?.id === c.id}
+            onClick={event => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              setMenu(menu?.id === c.id ? null : { id: c.id, right: window.innerWidth - rect.right,
+                top: Math.min(rect.bottom + 3, window.innerHeight - 106) });
+            }}>⋯</button>
+          {menu?.id === c.id && <div className="case-menu" style={{right: menu.right, top: menu.top}}>
+            <button onClick={() => { setMenu(null); setRenaming(c); }}>重新命名</button>
+            <button disabled={busy || (thread?.id === c.id && !!thread.active_turn)} onClick={() => {
+              setMenu(null);
+              if (window.confirm('確定刪除「' + (caseSubtitle(c) || caseTitle(c)) + '」的整段案件對話？刪除後，所有人都無法再透過分享網址查看。')) deleteCase(c.id);
+            }}>刪除案件對話</button>
+          </div>}
+        </>}
+        </div>)}</nav>
         {filter && !visible.length && <p id="no-matches" role="status">沒有符合的案件</p>}
         {user.admin && <nav className="admin-nav" aria-label="管理功能">
           <button id="manage" aria-current={view === 'admin'} disabled={busy}
@@ -311,7 +421,7 @@ function App() {
           <MessageForm programs={programs} busy={busy} onSend={createCase} onError={setStatus} />
         </section>
         {view === 'thread' && thread && <Thread key={thread.id} thread={thread} thinking={thinking} busy={busy}
-          remove={() => deleteCase(thread.id)} refresh={() => openCase(thread.id)} retry={() => act(() => turn(thread.id))} reply={data => act(() => turn(thread.id, data))} onError={setStatus} />}
+          refresh={() => openCase(thread.id)} retry={() => act(() => turn(thread.id))} reply={data => act(() => turn(thread.id, data))} onError={setStatus} />}
         {view === 'admin' && user.admin && <section id="admin"><Hero label="管理員" title="程式索引" />
           <ProgramIndex programs={programs} busy={busy}
             save={(name, values) => changeProgram(name, { method: name ? 'PUT' : 'POST',
