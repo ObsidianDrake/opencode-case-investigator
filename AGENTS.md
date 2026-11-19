@@ -13,9 +13,9 @@
 
 - 登入走 Gitea OAuth，只開放符合 internal 規則的帳號。所有登入帳號可讀取所有案件；追問、重試、終止與刪除案件由後端限建立者與管理員操作。Gitea admin 可以接手使用者的對話，並新增、修改、刪除資料庫中的程式索引。
 - 初次報案必填執行的程式、程式**執行位置**與遇到的狀況。後端以服務帳號實際讀取及進入使用者填寫的執行目錄，成功後才同步 Git 並呼叫 OpenCode。權限不足時前端顯示原因並保留表單。報案及追問都支援附件和在文字欄位直接貼圖。
-- 開案時由後端更新索引對應的 Gitea main/master 分支，保留 commit。案件對話主標題用程式名稱，副標題用 OpenCode session title，搜尋支援這兩個欄位。
+- 程式索引必填程式名稱與程式路徑。有設定 repository 時，開案由後端更新對應的 Gitea main/master 分支，保留 commit。案件對話主標題用程式名稱，副標題用 OpenCode session title，搜尋支援這兩個欄位。
 - 每案一個 OpenCode session。首次訊息、追問、重試與管理員接手都明確指定 `investigate-web`。由 OpenCode 呼叫模型；web service 只提供調查結果。模型 API 與憑證由 OpenCode 管理。
-- 新案件的 OpenCode directory 是報案時提供的 run root。建立案件前檢查群組寫入位元及服務帳號的實際存取權。每案獨立 clone 至 run root 下的 `.opencode-tmp/case-*/source/`，附件放在同案的 `attachments/`。既有 snapshot session 沿用原目錄。案件開放 read、grep、glob，並依程式設定放行所選 Skill 與其附檔目錄。
+- 新案件的 OpenCode directory 是報案時提供的 run root。建立案件前檢查群組寫入位元及服務帳號的實際存取權。有指定 repository 的案件獨立 clone 至 run root 下的 `.opencode-tmp/case-*/source/`，附件放在同案的 `attachments/`。既有 snapshot session 沿用原目錄。案件開放 read、grep、glob，並依程式設定放行所選 Skill 與其附檔目錄。
 
 ## 驗證
 

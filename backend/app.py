@@ -154,7 +154,10 @@ def create_app(cfg=None):
                 db.execute("DROP TABLE cases_before_share_links")
 
             existing = {c[1] for c in db.execute("PRAGMA table_info(cases)")}
-            if "skills" not in {c[1] for c in db.execute("PRAGMA table_info(programs)")}:
+            program_columns = {c[1] for c in db.execute("PRAGMA table_info(programs)")}
+            if "program_path" not in program_columns:
+                db.execute("ALTER TABLE programs ADD COLUMN program_path TEXT NOT NULL DEFAULT ''")
+            if "skills" not in program_columns:
                 db.execute("ALTER TABLE programs ADD COLUMN skills TEXT NOT NULL DEFAULT '[]'")
             for column in ("custom_title", "custom_subtitle", "skills"):
                 if column not in existing:
@@ -344,6 +347,26 @@ def create_app(cfg=None):
                 rules.append({"permission": "external_directory", "pattern": str(path.parent / "*"), "action": "allow"})
         return rules
 
+    @route("/api/admin/repositories")
+    def find_repositories():
+        if not g.user["admin"]:
+            abort(403)
+        page = request.args.get("page", default=1, type=int)
+        if page < 1:
+            abort(400, "頁碼必須大於零。")
+        params = urlencode(dict(q=request.args.get("q", "").strip(), page=page, limit=20,
+                                sort="alpha", order="asc"))
+        token = env.get("GITEA_TOKEN")
+        headers = {"Authorization": "token " + token} if token else {}
+        result = remote("Gitea repository search", base + "/api/v1/repos/search?" + params,
+                        headers=headers, timeout=10)
+        if not isinstance(result, dict) or not isinstance(result.get("data"), list):
+            abort(502, "Gitea 回傳的 repository 清單格式不符。")
+        rows = result["data"]
+        names = [row["full_name"] for row in rows if isinstance(row, dict)
+                 and isinstance(row.get("full_name"), str) and REPOSITORY.fullmatch(row["full_name"])]
+        return jsonify(names=names, has_more=len(rows) == 20)
+
     @route("/api/programs", methods=["GET","POST"])
     def programs():
         if request.method == "GET":
@@ -359,9 +382,20 @@ def create_app(cfg=None):
         if not g.user["admin"]:
             abort(403)
         fields = request.get_json()
-        name, repo, branch, entry = [str(fields.get(k,"")).strip() for k in ("name","repo","branch","entry")]
-        if not PROGRAM.fullmatch(name) or not REPOSITORY.fullmatch(repo) or branch not in ("main","master"):
-            abort(400,"請確認程式名稱、owner/repo 和分支。")
+        if not isinstance(fields, dict):
+            abort(400, "請提供程式索引資料。")
+        keys = ("name", "repo", "branch", "entry", "program_path")
+        if any(fields.get(k) is not None and not isinstance(fields[k], str) for k in keys):
+            abort(400, "程式索引欄位格式不符。")
+        name, repo, branch, entry, program_path = [(fields.get(k) or "").strip() for k in keys]
+        if not PROGRAM.fullmatch(name):
+            abort(400, "請填寫有效的程式名稱。")
+        if repo and not REPOSITORY.fullmatch(repo):
+            abort(400, "請選擇有效的 Gitea repository。")
+        if repo and branch not in ("main", "master"):
+            abort(400, "選擇 repository 後，請指定 main 或 master 分支。")
+        if not repo:
+            branch = entry = ""
         if entry.startswith("/") or ".." in Path(entry).parts:
             abort(400,"入口檔請使用 repository 相對路徑。")
         skills = fields.get("skills")
@@ -374,12 +408,19 @@ def create_app(cfg=None):
         try:
             with db():
                 db().execute("BEGIN IMMEDIATE")
-                if old is not None and skills is None:
-                    previous = db().execute("SELECT skills FROM programs WHERE name=?", (old,)).fetchone()
-                    skills = previous["skills"] if previous else None
+                if old is not None and (skills is None or "program_path" not in fields):
+                    previous = db().execute("SELECT skills,program_path FROM programs WHERE name=?", (old,)).fetchone()
+                    if previous:
+                        if skills is None:
+                            skills = previous["skills"]
+                        if "program_path" not in fields:
+                            program_path = previous["program_path"]
+                if not program_path.strip():
+                    abort(400, "請填寫程式路徑。")
                 if old is not None and not db().execute("DELETE FROM programs WHERE name=?", (old,)).rowcount:
                     abort(404)
-                db().execute("INSERT INTO programs(name,repo,branch,entry,skills) VALUES(?,?,?,?,?)",(name,repo,branch,entry,skills or "[]"))
+                db().execute("INSERT INTO programs(name,repo,branch,entry,skills,program_path) VALUES(?,?,?,?,?,?)",
+                             (name,repo,branch,entry,skills or "[]",program_path))
         except sqlite3.IntegrityError:
             abort(409,"此程式已存在。")
         return "",204
@@ -445,10 +486,13 @@ def create_app(cfg=None):
         folder, logs = run_evidence(request.form.get("folder", ""))
         permissions = case_permissions(json.loads(mapping["skills"]), folder)
         with case_workspace(folder) as (workspace, handle):
-            logger.info("Syncing Gitea repository=%s branch=%s", mapping[0], mapping[1])
-            revision,source = source_context(state, base, mapping[:3], program, handle, token=env.get("GITEA_TOKEN"))
-            evidence = "本案原始碼目錄："+str(workspace / "source")+"\n版本 "+revision+"\n程式碼\n"+source+"\n執行紀錄\n"+logs
-            logger.info("Source checkout ready revision=%s; creating OpenCode session", revision)
+            revision = ""
+            evidence = "本案程式：" + program + "\n執行目錄：" + str(folder)
+            if mapping["repo"]:
+                logger.info("Syncing Gitea repository=%s branch=%s", mapping["repo"], mapping["branch"])
+                revision, source = source_context(state, base, mapping[:3], program, handle, token=env.get("GITEA_TOKEN"))
+                evidence += "\n本案原始碼目錄：" + str(workspace / "source") + "\n版本 " + revision + "\n程式碼\n" + source
+            evidence += "\n執行紀錄\n" + logs
             sid = opencode("OpenCode create session", "/session?" + urlencode({"directory":str(folder)}), {"permission": permissions})["id"]
             with db():
                 cid = db().execute("INSERT INTO cases(owner,author,program,folder,summary,revision,sid,evidence,workspace,session_directory,skills) VALUES(?,?,?,?,?,?,?,?,?,?,?)",

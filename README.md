@@ -69,8 +69,8 @@ make run
 
 ## 查案資料與執行方式
 
-1. 管理員在「管理程式索引」建立程式、owner/repository、main 或 master，以及可選的入口檔。同步使用服務帳號預設的 Git credential helper。
-2. 開案時，服務先確認服務帳號可讀取與進入填寫的執行目錄，再將指定分支淺層 clone 至該位置的 `.opencode-tmp/case-*/source/`，每個案件使用獨立目錄。每案記錄當時 commit。未填入口檔時，依程式檔名在對應 repository 內找唯一符合的檔案。
+1. 管理員在「管理程式索引」須填寫程式名稱與程式路徑，可搜尋 Gitea repository。選取 repository 時須指定 main 或 master，並可填入口檔。未指定 repository 時，直接依 run root 的內容查案。Repository 搜尋使用已設定的 Gitea token，未設定時查詢公開清單。同步使用服務帳號預設的 Git credential helper。
+2. 開案時，服務先確認服務帳號可讀取與進入填寫的執行目錄。有選取 repository 時，才將指定分支淺層 clone 至該位置的 `.opencode-tmp/case-*/source/`，每個案件使用獨立目錄，並記錄當時的 commit。未填入口檔時，依程式檔名在對應 repository 內找唯一符合的檔案。
 3. 案件擷取執行位置第一層最多六個 log、err、out 檔，各取末尾 6000 bytes。程式入口最多擷取前 32000 bytes。OpenCode 可以從 run root 檢閱執行資料，也可以依案件提供的原始碼路徑讀取完整 checkout。
 4. 每案有獨立 OpenCode session。首次查案、使用者追問和管理員接手時，後端都指定 `investigate-web` agent。部署時須讓 OpenCode 從使用者提供的 run root 也能載入這個 agent。管理員可在程式索引選填 OpenCode Skills。新案件開放 `read`、`glob`、`grep`，並限於所選 Skill 名稱與其附檔目錄授權。Skill 名稱沿用開案時的設定，Bash 指令會直接被拒絕。部署時使用專用且受限的 OpenCode 作業系統帳號，限制可讀取的部署資料範圍。升級前建立的 session 仍使用原快照目錄；要調查 run root 請重新開案。模型和 provider 憑證由 OpenCode 自己管理。每個有圖片的回合會先把原圖寫入該案私有子目錄下的 `attachments/message-<訊息編號>.png` 或 `.jpg`，再傳送文字路徑請 agent 用 `read` 開啟。聊天室預覽沿用 SQLite 中的附件。圖片辨識仍取決於工具與模型的影像能力。
 5. 瀏覽器先儲存使用者訊息，再等待該回合回覆。服務使用本機檔案鎖避免同案並行送出。等待 OpenCode 調查回覆沒有應用程式時限。案件擁有者或管理員可以點「終止查案」中止該次回合，再於同案繼續提問。代理層的連線逾時需另行設定。案件及附件保存在部署環境。此版以單機部署為目標。

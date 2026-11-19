@@ -22,6 +22,7 @@ async function api(path, options = {}) {
   return response.status === 204 ? null : response.json();
 }
 
+const searchRepos = (q, page) => api('admin/repositories?' + new URLSearchParams({ q, page }));
 const loadSkills = () => api('admin/skills');
 
 function Login() {
@@ -151,7 +152,7 @@ function Thread({ thread, thinking, busy, retry, reply, refresh, onError }) {
       <button className="heading-toggle" aria-label={heroOpen ? '收合案件標題' : '展開案件標題'} aria-expanded={heroOpen} onClick={() => { manualHeading.current = true; setHeroOpen(!heroOpen); }}>{heroOpen ? '⌃' : '⌄'}</button>
       {heroOpen ? <Hero label="案件對話" title={caseTitle(thread)}>
       {caseSubtitle(thread) && <p id="subtitle">{caseSubtitle(thread)}</p>}
-      <p id="meta" title={thread.folder + ' · ' + thread.revision}>{thread.folder} · {thread.revision.slice(0, 8)}</p>
+      <p id="meta" title={[thread.folder, thread.revision].filter(Boolean).join(' · ')}>{thread.folder}{thread.revision && ' · ' + thread.revision.slice(0, 8)}</p>
     </Hero> : <h1 className="compact-title">{caseSubtitle(thread) || caseTitle(thread)}</h1>}
     </div>
     <div className="conversation">
@@ -425,7 +426,7 @@ function App() {
         {view === 'thread' && thread && <Thread key={thread.id} thread={thread} thinking={thinking} busy={busy}
           refresh={() => openCase(thread.id)} retry={() => act(() => turn(thread.id))} reply={data => act(() => turn(thread.id, data))} onError={setStatus} />}
         {view === 'admin' && user.admin && <section id="admin"><Hero label="管理員" title="程式索引" />
-          <ProgramIndex loadSkills={loadSkills} programs={programs} busy={busy}
+          <ProgramIndex searchRepos={searchRepos} loadSkills={loadSkills} programs={programs} busy={busy}
             save={(name, values) => changeProgram(name, { method: name ? 'PUT' : 'POST',
               headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values) })}
             remove={name => changeProgram(name, { method: 'DELETE' })} />

@@ -41,8 +41,53 @@ class ServiceTests(unittest.TestCase):
 
     def mapping(self):
         self.user(admin=True)
-        data = dict(name="demo",repo="samples/demo",branch="main",entry="demo.py")
+        data = dict(name="demo",program_path="/opt/demo/bin/",repo="samples/demo",branch="main",entry="demo.py")
         self.assertEqual(self.api("POST","programs",json=data).status_code,204)
+
+    @patch("app.remote")
+    def test_repository_search(self, remote):
+        self.user()
+        self.assertEqual(self.api("GET", "admin/repositories").status_code, 403)
+        remote.assert_not_called()
+        self.user(admin=True)
+        remote.return_value = {"data": [{"full_name": "tools/sample"}]}
+        options = self.api("GET", "admin/repositories?q=sample&page=2")
+        self.assertEqual(options.json, {"names": ["tools/sample"], "has_more": False})
+        url = urlsplit(remote.call_args.args[1])
+        self.assertTrue(url.path.endswith("/api/v1/repos/search"))
+        self.assertEqual(parse_qs(url.query)["page"], ["2"])
+        self.assertEqual(parse_qs(url.query)["q"], ["sample"])
+
+    @patch("app.remote")
+    @patch("app.source_context")
+    def test_repository_optional_for_investigation(self, source, remote):
+        self.user(admin=True)
+        self.assertEqual(self.api("POST", "programs", json={"name": ""}).status_code, 400)
+        self.assertEqual(self.api("POST", "programs", json={"name": "demo", "program_path": "/opt/demo/bin/", "repo": "tools/demo"}).status_code, 400)
+        self.assertEqual(self.api("POST", "programs", json={"name": "demo", "program_path": "/opt/demo/bin/"}).status_code, 204)
+        self.user()
+        remote.side_effect = [{"id": "session"}, {"parts": [{"type": "text", "text": "OK"}]}, {"title": "Demo"}]
+        create = self.api("POST", "cases", data=dict(text="check", program="demo", folder=str(self.run)))
+        self.assertEqual(create.status_code, 201)
+        cid = "cases/" + str(create.json["id"])
+        self.assertEqual(self.api("POST", cid + "/turn").status_code, 204)
+        self.assertIn(str(self.run), remote.call_args_list[1].args[2]["parts"][0]["text"])
+        self.assertEqual(self.api("GET", cid).json["revision"], "")
+        source.assert_not_called()
+
+    def test_program_path_round_trip(self):
+        self.user(admin=True)
+        for fields in ({}, {"program_path": "  "}):
+            result = self.api("POST", "programs", json=dict(name="demo", **fields))
+            self.assertEqual(result.status_code, 400)
+            self.assertIn("程式路徑", result.json["error"])
+        data = dict(name="demo", program_path="/opt/demo/bin/")
+        self.assertEqual(self.api("POST", "programs", json=data).status_code, 204)
+        self.assertEqual(self.api("GET", "programs").json[0]["program_path"], data["program_path"])
+        self.assertEqual(self.api("PUT", "programs/demo", json=dict(name="demo")).status_code, 204)
+        self.assertEqual(self.api("GET", "programs").json[0]["program_path"], data["program_path"])
+        self.assertEqual(self.api("PUT", "programs/demo", json=dict(name="demo", program_path="")).status_code, 400)
+        self.assertEqual(self.api("GET", "programs").json[0]["program_path"], data["program_path"])
 
     def test_routes_and_roles(self):
         self.assertEqual(self.client.get(self.prefix).status_code,302)
@@ -96,7 +141,7 @@ class ServiceTests(unittest.TestCase):
         self.mapping()
         update = dict(name="renamed",repo="samples/demo",branch="master",entry="main.py")
         self.assertEqual(self.api("PUT","programs/demo",json=update).status_code,204)
-        self.assertEqual(self.api("GET","programs").json,[dict(update, skills=[])])
+        self.assertEqual(self.api("GET","programs").json,[dict(update, skills=[], program_path="/opt/demo/bin/")])
         self.assertEqual(self.api("DELETE","programs/renamed").status_code,204)
         self.assertEqual(self.api("GET","programs").json,[])
 
