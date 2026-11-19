@@ -96,7 +96,7 @@ class ServiceTests(unittest.TestCase):
         self.mapping()
         update = dict(name="renamed",repo="samples/demo",branch="master",entry="main.py")
         self.assertEqual(self.api("PUT","programs/demo",json=update).status_code,204)
-        self.assertEqual(self.api("GET","programs").json,[update])
+        self.assertEqual(self.api("GET","programs").json,[dict(update, skills=[])])
         self.assertEqual(self.api("DELETE","programs/renamed").status_code,204)
         self.assertEqual(self.api("GET","programs").json,[])
 
@@ -152,6 +152,33 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(self.api("GET", "cases").json, [])
         source.assert_not_called()
         remote.assert_not_called()
+
+    @patch("app.remote")
+    @patch("app.source_context", return_value=("revision", "source"))
+    def test_selected_skill_permissions(self, source, remote):
+        self.mapping()
+        catalog = [dict(name="sample", location="/srv/skills/sample/SKILL.md")]
+        remote.return_value = catalog
+        program = dict(name="demo", repo="samples/demo", branch="main", skills=["sample"])
+        self.assertEqual(self.api("PUT", "programs/demo", json=program).status_code, 204)
+        self.user()
+        form = dict(text="test", program="demo", folder=str(self.run))
+        remote.side_effect = [catalog, [dict(name="sample", location="/other/SKILL.md")]]
+        self.assertEqual(self.api("POST", "cases", data=form).status_code, 409)
+        source.assert_not_called()
+        names_only = [dict(name="sample")]
+        wrapped = {"location": {"directory": str(self.run)}, "data": catalog}
+        remote.side_effect = [names_only, names_only, wrapped, wrapped, {"id": "session"}]
+        created = self.api("POST", "cases", data=form)
+        self.assertEqual(created.status_code, 201)
+        rules = remote.call_args.args[2]["permission"]
+        self.assertEqual(rules, [{"permission": "*", "pattern": "*", "action": "deny"}] + [
+            {"permission": key, "pattern": pattern, "action": "allow"} for key, pattern in
+            [("read", "*"), ("grep", "*"), ("glob", "*"), ("skill", "sample"),
+             ("external_directory", "/srv/skills/sample/*")]])
+        remote.side_effect = [{"parts": [{"type": "text", "text": "OK"}]}, {"title": "OK"}]
+        self.assertEqual(self.api("POST", "cases/%s/turn" % created.json["id"]).status_code, 204)
+        self.assertIn("sample", remote.call_args_list[-2].args[2]["system"])
 
     @patch("app.remote")
     @patch("app.source_context",return_value=("revision","source"))

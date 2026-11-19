@@ -154,7 +154,9 @@ def create_app(cfg=None):
                 db.execute("DROP TABLE cases_before_share_links")
 
             existing = {c[1] for c in db.execute("PRAGMA table_info(cases)")}
-            for column in ("custom_title", "custom_subtitle"):
+            if "skills" not in {c[1] for c in db.execute("PRAGMA table_info(programs)")}:
+                db.execute("ALTER TABLE programs ADD COLUMN skills TEXT NOT NULL DEFAULT '[]'")
+            for column in ("custom_title", "custom_subtitle", "skills"):
                 if column not in existing:
                     db.execute(f"ALTER TABLE cases ADD COLUMN {column} TEXT")
 
@@ -299,11 +301,58 @@ def create_app(cfg=None):
                 models[name] = isinstance(inputs, dict) and inputs.get("image") is True
         return jsonify([{"id": name, "image_input": models[name]} for name in sorted(models)])
 
+    def skill_catalog(directory=None, *, detailed=False):
+        path = "/api/skill" if detailed else "/skill"
+        if directory:
+            key = "location[directory]" if detailed else "directory"
+            path += "?" + urlencode({key: str(directory)})
+        items = opencode("OpenCode list skills", path, timeout=10)
+        if detailed and isinstance(items, dict):
+            items = items.get("data")
+        if not isinstance(items, list):
+            abort(502, "OpenCode 回傳的 Skill 清單格式不符。")
+        return {item["name"]: item for item in items if isinstance(item, dict)
+                and isinstance(item.get("name"), str) and re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", item["name"])}
+
+    @route("/api/admin/skills")
+    def available_skills():
+        if not g.user["admin"]:
+            abort(403)
+        return jsonify(sorted(skill_catalog()))
+
+    def case_permissions(names, folder):
+        rules = [{"permission": "*", "pattern": "*", "action": "deny"}]
+        for tool in ("read", "grep", "glob"):
+            rules.append({"permission": tool, "pattern": "*", "action": "allow"})
+        if names:
+            registered = skill_catalog()
+            visible = skill_catalog(folder)
+            if any(not registered.get(name, {}).get("location") or not visible.get(name, {}).get("location")
+                   for name in names if name in registered and name in visible):
+                registered = skill_catalog(detailed=True)
+                visible = skill_catalog(folder, detailed=True)
+            for name in names:
+                location = registered.get(name, {}).get("location")
+                if name not in visible or not isinstance(location, str) or visible[name].get("location") != location:
+                    abort(409, f"請確認 OpenCode 在此執行目錄可載入已登錄的 Skill：{name}")
+                path = Path(location)
+                if (not path.is_absolute() or path.name != "SKILL.md" or path.parent == Path("/")
+                        or ".." in path.parts or any(c in location for c in "*?[]\\")
+                        or str(path) != location):
+                    abort(502, f"OpenCode 的 Skill 路徑無法用於附檔權限：{name}")
+                rules.append({"permission": "skill", "pattern": name, "action": "allow"})
+                rules.append({"permission": "external_directory", "pattern": str(path.parent / "*"), "action": "allow"})
+        return rules
+
     @route("/api/programs", methods=["GET","POST"])
     def programs():
         if request.method == "GET":
             fields = "*" if g.user["admin"] else "name"
-            return jsonify([dict(r) for r in db().execute("SELECT "+fields+" FROM programs ORDER BY name")])
+            rows = [dict(r) for r in db().execute("SELECT "+fields+" FROM programs ORDER BY name")]
+            if g.user["admin"]:
+                for row in rows:
+                    row["skills"] = json.loads(row["skills"])
+            return jsonify(rows)
         return save_program(None)
 
     def save_program(old):
@@ -315,11 +364,22 @@ def create_app(cfg=None):
             abort(400,"請確認程式名稱、owner/repo 和分支。")
         if entry.startswith("/") or ".." in Path(entry).parts:
             abort(400,"入口檔請使用 repository 相對路徑。")
+        skills = fields.get("skills")
+        if skills is not None:
+            if not isinstance(skills, list) or any(not isinstance(name, str) for name in skills):
+                abort(400, "查案 Skills 格式錯誤。")
+            if skills and set(skills).difference(skill_catalog()):
+                abort(400, "請選擇已登錄的 OpenCode Skill。")
+            skills = json.dumps(list(dict.fromkeys(skills)))
         try:
             with db():
+                db().execute("BEGIN IMMEDIATE")
+                if old is not None and skills is None:
+                    previous = db().execute("SELECT skills FROM programs WHERE name=?", (old,)).fetchone()
+                    skills = previous["skills"] if previous else None
                 if old is not None and not db().execute("DELETE FROM programs WHERE name=?", (old,)).rowcount:
                     abort(404)
-                db().execute("INSERT INTO programs VALUES(?,?,?,?)",(name,repo,branch,entry))
+                db().execute("INSERT INTO programs(name,repo,branch,entry,skills) VALUES(?,?,?,?,?)",(name,repo,branch,entry,skills or "[]"))
         except sqlite3.IntegrityError:
             abort(409,"此程式已存在。")
         return "",204
@@ -378,22 +438,21 @@ def create_app(cfg=None):
                 (g.user["id"], g.user["admin"]))])
         body,image = content()
         program = request.form.get("program","")
-        mapping = db().execute("SELECT repo,branch,entry FROM programs WHERE name=?",(program,)).fetchone()
+        mapping = db().execute("SELECT repo,branch,entry,skills FROM programs WHERE name=?",(program,)).fetchone()
         if not mapping:
             abort(400,"請先選取已登錄的程式。")
         logger.info("Collecting run evidence program=%s", program)
         folder, logs = run_evidence(request.form.get("folder", ""))
+        permissions = case_permissions(json.loads(mapping["skills"]), folder)
         with case_workspace(folder) as (workspace, handle):
             logger.info("Syncing Gitea repository=%s branch=%s", mapping[0], mapping[1])
-            revision,source = source_context(state, base, mapping, program, handle, token=env.get("GITEA_TOKEN"))
+            revision,source = source_context(state, base, mapping[:3], program, handle, token=env.get("GITEA_TOKEN"))
             evidence = "本案原始碼目錄："+str(workspace / "source")+"\n版本 "+revision+"\n程式碼\n"+source+"\n執行紀錄\n"+logs
             logger.info("Source checkout ready revision=%s; creating OpenCode session", revision)
-            sid = opencode("OpenCode create session", "/session?" + urlencode({"directory":str(folder)}), {"permission":[
-                {"permission":"*","pattern":"*","action":"deny"},
-                *[{"permission":tool,"pattern":"*","action":"allow"} for tool in ("read","grep","glob")]]})["id"]
+            sid = opencode("OpenCode create session", "/session?" + urlencode({"directory":str(folder)}), {"permission": permissions})["id"]
             with db():
-                cid = db().execute("INSERT INTO cases(owner,author,program,folder,summary,revision,sid,evidence,workspace,session_directory) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                    (g.user["id"],g.user["login"],program,str(folder),body[:120],revision,sid,evidence,str(workspace),str(folder))).lastrowid
+                cid = db().execute("INSERT INTO cases(owner,author,program,folder,summary,revision,sid,evidence,workspace,session_directory,skills) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                    (g.user["id"],g.user["login"],program,str(folder),body[:120],revision,sid,evidence,str(workspace),str(folder),mapping["skills"])).lastrowid
                 db().execute("INSERT INTO messages(cid,author,body,image) VALUES(?,?,?,?)",(cid,g.user["login"],body,image))
         logger.info("Case created case=%d program=%s", cid, program)
         return jsonify(id=cid),201
@@ -533,6 +592,9 @@ def create_app(cfg=None):
             timestamp = ((time.time_ns() // 1_000_000) << 12) & 0xffffffffffff
             message_id = "msg_%012x%s" % (timestamp, uuid.uuid4().hex[:14])
             payload = dict(messageID=message_id, agent="investigate-web", system=SYSTEM, parts=parts)
+            skills = json.loads(row["skills"] or "[]")
+            if skills:
+                payload["system"] += "請先使用 skill 工具載入本案指定的 Skills，並依需要讀取其參考檔：" + "、".join(skills) + "。"
             model_name = current_model()
             if model_name:
                 provider, model_id = model_name.split("/", 1)

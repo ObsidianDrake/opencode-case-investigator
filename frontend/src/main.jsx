@@ -22,6 +22,8 @@ async function api(path, options = {}) {
   return response.status === 204 ? null : response.json();
 }
 
+const loadSkills = () => api('admin/skills');
+
 function Login() {
   return <section id="login" aria-labelledby="login-title"><div className="login-stage">
     <div className="login-copy">
@@ -395,12 +397,12 @@ function App() {
           <button id="manage" aria-current={view === 'admin'} disabled={busy}
             onClick={() => switchView('admin')}>管理程式索引</button>
           <button id="model-settings" aria-current={view === 'model'} disabled={busy}
-            onClick={openModelSettings}>查案模型設定</button>
+            onClick={openModelSettings}>OpenCode 設定</button>
         </nav>}
         </div>
       </aside><article>
         {view === 'model' && user.admin && <section>
-          <Hero label="管理員" title="查案模型設定" />
+          <Hero label="管理員" title="OpenCode 設定" />
           <form id="model-form" onSubmit={saveModel}>
             <p>目前模型：<strong>{model || '由 OpenCode 選擇'}</strong></p>
             <label>可用模型<select name="model" value={choice}
@@ -423,7 +425,7 @@ function App() {
         {view === 'thread' && thread && <Thread key={thread.id} thread={thread} thinking={thinking} busy={busy}
           refresh={() => openCase(thread.id)} retry={() => act(() => turn(thread.id))} reply={data => act(() => turn(thread.id, data))} onError={setStatus} />}
         {view === 'admin' && user.admin && <section id="admin"><Hero label="管理員" title="程式索引" />
-          <ProgramIndex programs={programs} busy={busy}
+          <ProgramIndex loadSkills={loadSkills} programs={programs} busy={busy}
             save={(name, values) => changeProgram(name, { method: name ? 'PUT' : 'POST',
               headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values) })}
             remove={name => changeProgram(name, { method: 'DELETE' })} />

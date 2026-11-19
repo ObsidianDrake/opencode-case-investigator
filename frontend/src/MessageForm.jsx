@@ -1,7 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+
+const programOrder = new Intl.Collator('en', { sensitivity: 'base' });
 
 export default function MessageForm({ programs, busy, onSend, onError }) {
   const intake = programs !== undefined;
+  const programNames = useMemo(
+    () => (programs || []).map(program => program.name).sort(programOrder.compare),
+    [programs]
+  );
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState('');
   const textarea = useRef(null);
@@ -30,6 +36,18 @@ export default function MessageForm({ programs, busy, onSend, onError }) {
     event.preventDefault();
     const form = event.currentTarget;
     const data = new FormData(form);
+    if (intake) {
+      const input = form.elements.program;
+      const typed = input.value.trim();
+      const matches = programNames.filter(name => name.toLowerCase() === typed.toLowerCase());
+      const name = programNames.includes(typed) ? typed : matches.length === 1 ? matches[0] : null;
+      if (!name) {
+        input.setCustomValidity('請從清單選擇已登錄的程式。');
+        input.reportValidity();
+        return;
+      }
+      data.set('program', name);
+    }
     if (file) data.set('image', file, file.name || 'capture.png');
     if (await onSend(data)) {
       form.reset();
@@ -40,8 +58,12 @@ export default function MessageForm({ programs, busy, onSend, onError }) {
   return <form id={intake ? 'report' : 'reply'} onSubmit={submit}>
     {intake && <>
       <label>執行的程式 <small>必填</small>
-        <select name="program" required>{programs.map(p => <option key={p.name}>{p.name}</option>)}</select>
+        <input name="program" list="intake-programs" placeholder="輸入程式名稱搜尋…" required
+          autoComplete="off" onInput={event => event.currentTarget.setCustomValidity('')} />
       </label>
+      <datalist id="intake-programs">
+        {programNames.map(name => <option key={name} value={name} />)}
+      </datalist>
       <label>程式執行位置 <small>必填</small>
         <input name="folder" placeholder="執行目錄絕對路徑（需有群組寫入權限）" required />
       </label>

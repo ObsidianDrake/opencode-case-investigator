@@ -333,3 +333,8 @@ body:has(#login:not([hidden])) header {
 .rename-dialog { width: min(360px, 92vw); border: 1px solid var(--line); border-radius: 8px; background: var(--sheet); color: var(--ink); padding: 20px; }
 .rename-dialog h2 { margin-top: 0; }
 .rename-dialog form > div { text-align: right; }
+
+.skill-picker { border: 1px solid var(--line); margin: 12px 0; }
+.skill-picker > div { max-height: 12rem; overflow-y: auto; }
+.skill-picker label { display: flex; align-items: center; gap: 8px; }
+.skill-picker input[type=checkbox] { width: auto; margin: 0; }
