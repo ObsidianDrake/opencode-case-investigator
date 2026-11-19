@@ -559,7 +559,7 @@ def create_app(cfg=None):
                     (g.user["id"],g.user["login"],program,str(folder),body[:120],revision,sid,evidence,str(workspace),str(folder),mapping["skills"])).lastrowid
                 db().execute("INSERT INTO messages(cid,author,body,image) VALUES(?,?,?,?)",(cid,g.user["login"],body,image))
         logger.info("Case created case=%d program=%s", cid, program)
-        return jsonify(id=cid),201
+        return detail(cid), 201
 
     # Waitress serves one process. Leave worker capacity for abort and status requests.
     turn_slots = threading.BoundedSemaphore(10)
@@ -638,7 +638,7 @@ def create_app(cfg=None):
             title = session_title(row)
         with turns_lock:
             turn_id = active_turns.get(cid, {}).get("id")
-        return jsonify(custom_title=row["custom_title"], custom_subtitle=row["custom_subtitle"], can_reply=can_manage_case(row),active_turn=turn_id,program=row["program"],session_title=title,folder=row["folder"],revision=row["revision"],messages=messages)
+        return jsonify(id=cid, custom_title=row["custom_title"], custom_subtitle=row["custom_subtitle"], can_reply=can_manage_case(row),active_turn=turn_id,program=row["program"],session_title=title,folder=row["folder"],revision=row["revision"],messages=messages)
 
     @contextmanager
     def locked_case(cid):

@@ -323,6 +323,7 @@ class ServiceTests(unittest.TestCase):
         create = self.api("POST","cases",data=form)
         self.assertEqual(create.status_code,201)
         cid = "cases/"+str(create.json["id"])
+        self.assertEqual(create.json, self.api("GET", cid).json)
         self.assertEqual(self.api("POST",cid+"/turn").status_code,204)
         self.assertEqual(remote.call_args_list[1].args[2]["agent"], "investigate-web")
         def check_image(call, expected, suffix):

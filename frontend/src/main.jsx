@@ -94,7 +94,7 @@ function PanelToggle({ side, open, controls, label, onClick }) {
   </button>;
 }
 
-function Thread({ thread, thinking, busy, retry, reply, refresh, onError }) {
+function Thread({ thread, thinking, turnError, busy, retry, reply, refresh, onError }) {
   const [heroOpen, setHeroOpen] = useState(true);
   const running = Boolean(thinking || thread.active_turn);
   const [idleReplyOpen, setIdleReplyOpen] = useState(() => window.innerWidth > 760);
@@ -161,6 +161,7 @@ function Thread({ thread, thinking, busy, retry, reply, refresh, onError }) {
         <strong>{m.author === '@agent' ? '查案助理' : m.author}</strong><ThinkingText text={m.reasoning} />{m.author === '@agent' ? <div className="message-body"><Markdown text={m.body} /></div> : <p className="message-body">{m.body}</p>}
         {m.image && <img src={m.image} alt="案件附件" />}
       </div>)}</div>
+    {turnError && <p role="alert">{turnError}</p>}
     {(thinking || activity) && <div id="thinking" role="status"><img src={hoppingScarecrow} width="56" height="56" alt="" />查案助手正在調查… {thread.can_reply && <button type="button" disabled={!activity || stopping} onClick={stop}>{stopping ? '正在終止…' : '終止查案'}</button>}</div>}
     {(thinking || activity) && <ThinkingText key={activity} text={reasoning} />}
     </div>
@@ -169,8 +170,8 @@ function Thread({ thread, thinking, busy, retry, reply, refresh, onError }) {
         onClick={() => running ? setRunningReplyOpen(!replyOpen) : setIdleReplyOpen(!replyOpen)} />
       <div id="reply-content" hidden={!replyOpen}>
       {pending
-      ? <button id="retry" disabled={busy || !!activity} onClick={retry}>重新取得回覆</button>
-      : <MessageForm busy={busy} onSend={reply} onError={onError} />}
+      ? <button id="retry" disabled={busy || running} onClick={retry}>重新取得回覆</button>
+      : <MessageForm busy={busy || running} onSend={reply} onError={onError} />}
       </div>
     </aside>}
   </section>;
@@ -189,19 +190,22 @@ function App() {
   const [catalogStatus, setCatalogStatus] = useState('');
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
-  const [thinking, setThinking] = useState(false);
+  const pendingTurns = useRef(new Set());
+  const selectedCase = useRef(null);
+  const detailVersion = useRef(0);
   const [status, setStatus] = useState('');
   const [menu, setMenu] = useState(null);
   const [renaming, setRenaming] = useState(null);
+  const menuId = menu?.id;
   useEffect(() => {
-    if (!menu) return;
+    if (menuId == null) return;
     const dismiss = event => {
       if (!event.target.closest?.('.case-menu, .case-actions')) setMenu(null);
     };
     const escape = event => {
       if (event.key === 'Escape') {
         setMenu(null);
-        document.getElementById('actions-button-' + menu.id)?.focus();
+        document.getElementById('actions-button-' + menuId)?.focus();
       }
     };
     const close = () => setMenu(null);
@@ -215,7 +219,23 @@ function App() {
       window.removeEventListener('scroll', close, true);
       window.removeEventListener('resize', close);
     };
-  }, [menu]);
+  }, [menuId]);
+  useEffect(() => {
+    if (menuId == null) return;
+    let live = true;
+    let timer;
+    async function checkActivity() {
+      try {
+        const { turn_id } = await api('cases/' + menuId + '/activity');
+        if (live) setMenu(current => current?.id === menuId ? { ...current, active: !!turn_id } : current);
+      } catch (error) {
+        if (live) setStatus(error.message);
+      }
+      if (live) timer = setTimeout(checkActivity, 1500);
+    }
+    checkActivity();
+    return () => { live = false; clearTimeout(timer); };
+  }, [menuId]);
   const locked = useRef(false);
 
   async function act(work) {
@@ -238,6 +258,7 @@ function App() {
   }
 
   function setCaseUrl(id, replace = false) {
+    selectedCase.current = id;
     const url = new URL(location.href);
     if (id == null) url.searchParams.delete('case');
     else url.searchParams.set('case', String(id));
@@ -246,12 +267,18 @@ function App() {
     }
   }
 
-  async function openCase(id, replace = false) {
+  async function refreshCase(id) {
+    const version = selectedCase.current === id ? ++detailVersion.current : null;
     const data = await api('cases/' + id);
-    setCaseUrl(id, replace);
-    setThread({ ...data, id });
+    if (selectedCase.current === id && version === detailVersion.current) setThread({ ...data, id });
     setCases(list => list.map(c => c.id === id ? { ...c, session_title: data.session_title } : c));
+  }
+
+  async function openCase(id, replace = false) {
+    setCaseUrl(id, replace);
+    setThread(current => current?.id === id ? current : null);
     setView('thread');
+    await refreshCase(id);
   }
 
   useEffect(() => {
@@ -274,19 +301,38 @@ function App() {
   }, []);
 
   async function turn(id, body) {
-    setThinking(true);
-    setStatus('');
-    try { await api('cases/' + id + '/turn', { method: 'POST', body }); }
-    finally { setThinking(false); await openCase(id); }
+    if (pendingTurns.current.has(id)) return false;
+    pendingTurns.current.add(id);
+    setCases(list => list.map(c => c.id === id ? { ...c, running: true, turnError: '' } : c));
+    let errorMessage = '';
+    try {
+      await api('cases/' + id + '/turn', { method: 'POST', body });
+    } catch (error) {
+      errorMessage = error.message;
+      if (error.status === 401) setUser(null);
+    }
+    try {
+      await refreshCase(id);
+    } catch (error) {
+      if (!errorMessage) errorMessage = error.message;
+      if (error.status === 401) setUser(null);
+    } finally {
+      pendingTurns.current.delete(id);
+      setCases(list => list.map(c => c.id === id ? { ...c, running: false, turnError: errorMessage } : c));
+    }
+    return !errorMessage;
   }
 
   function createCase(data) {
     return act(async () => {
-      const { id } = await api('cases', { method: 'POST', body: data });
-      setCases(await api('cases'));
+      const created = await api('cases', { method: 'POST', body: data });
+      const { id, program, session_title, can_reply } = created;
+      setCases(list => [{ id, program, session_title, can_manage: can_reply }, ...list]);
       setCasesOpen(false);
-      await openCase(id);
-      await turn(id);
+      setCaseUrl(id);
+      setThread(created);
+      setView('thread');
+      void turn(id);
     });
   }
 
@@ -345,6 +391,7 @@ function App() {
     });
   }
 
+  const currentCase = cases.find(c => c.id === thread?.id);
   const filter = query.trim().toLocaleLowerCase();
   const visible = cases.filter(c => [c.program, caseTitle(c), caseSubtitle(c)].some(v => v.toLocaleLowerCase().includes(filter)));
   return <>
@@ -386,7 +433,7 @@ function App() {
             }}>⋯</button>
           {menu?.id === c.id && <div className="case-menu" style={{right: menu.right, top: menu.top}}>
             <button onClick={() => { setMenu(null); setRenaming(c); }}>重新命名</button>
-            <button disabled={busy || (thread?.id === c.id && !!thread.active_turn)} onClick={() => {
+            <button disabled={busy || c.running || menu.active !== false} onClick={() => {
               setMenu(null);
               if (window.confirm('確定刪除「' + (caseSubtitle(c) || caseTitle(c)) + '」的整段案件對話？刪除後，所有人都無法再透過分享網址查看。')) deleteCase(c.id);
             }}>刪除案件對話</button>
@@ -423,8 +470,8 @@ function App() {
         <section id="intake" hidden={view !== 'intake'}><Hero label="查案助理" title="開始新的調查" />
           <MessageForm programs={programs} busy={busy} onSend={createCase} onError={setStatus} />
         </section>
-        {view === 'thread' && thread && <Thread key={thread.id} thread={thread} thinking={thinking} busy={busy}
-          refresh={() => openCase(thread.id)} retry={() => act(() => turn(thread.id))} reply={data => act(() => turn(thread.id, data))} onError={setStatus} />}
+        {view === 'thread' && thread && <Thread key={thread.id} thread={thread} thinking={!!currentCase?.running} turnError={currentCase?.turnError} busy={busy}
+          refresh={() => refreshCase(thread.id)} retry={() => turn(thread.id)} reply={data => turn(thread.id, data)} onError={setStatus} />}
         {view === 'admin' && user.admin && <section id="admin"><Hero label="管理員" title="程式索引" />
           <ProgramIndex searchRepos={searchRepos} loadSkills={loadSkills} programs={programs} busy={busy}
             save={(name, values) => changeProgram(name, { method: name ? 'PUT' : 'POST',

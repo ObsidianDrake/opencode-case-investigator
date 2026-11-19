@@ -34,6 +34,7 @@ export default function MessageForm({ programs, busy, onSend, onError }) {
 
   async function submit(event) {
     event.preventDefault();
+    if (busy) return;
     const form = event.currentTarget;
     const data = new FormData(form);
     if (intake) {
