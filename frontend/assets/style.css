@@ -273,3 +273,26 @@ body:has(#login:not([hidden])) header {
 .markdown table { display: block; overflow-x: auto; border-collapse: collapse; }
 .markdown :is(th,td) { border: 1px solid var(--line); padding: .25em .55em; }
 .markdown a { color: var(--brick); text-decoration: underline; }
+
+#case-controls:not([hidden]) { display: contents; }
+.thread-heading { position: relative; grid-area: heading; }
+.heading-toggle { position: absolute; top: 5px; right: 5px; }
+.thread-heading .hero, .compact-title { padding-right: 55px; }
+.compact-title { margin: 0; padding-block: 10px; font-size: 18px; }
+#thread {
+  width: 100%; display: grid; gap: 10px;
+  grid-template: "heading heading" auto "conversation reply" minmax(0, 1fr) / minmax(0, 1fr) auto;
+}
+.conversation { grid-area: conversation; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.reply-panel { grid-area: reply; display: flex; padding: 8px; border: 1px solid var(--line); overflow: auto; width: clamp(220px, 22vw, 340px); }
+.reply-panel:has([hidden]#reply-content) { width: auto; }
+#reply-content input { max-width: 100%; }
+@media (min-width: 761px) {
+  #workspace.cases-closed { grid-template-columns: auto minmax(0, 1fr); }
+  .cases-closed .case-panel { padding-inline: 6px; }
+}
+@media (max-width: 760px) {
+  #thread { position: relative; grid-template: "heading heading" auto "conversation reply" auto / minmax(0, 1fr) auto; }
+  .reply-panel:has(#reply-content:not([hidden])) { position: absolute; right: 0; top: 0; width: min(300px, 82vw); max-height: 65vh; z-index: 1; }
+  .case-panel > button[aria-expanded] { grid-column: 1 / -1; }
+}

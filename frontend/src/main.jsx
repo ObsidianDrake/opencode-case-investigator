@@ -53,6 +53,8 @@ function ThinkingText({ text }) {
 }
 
 function Thread({ thread, thinking, busy, retry, reply, refresh, onError }) {
+  const [heroOpen, setHeroOpen] = useState(true);
+  const [replyOpen, setReplyOpen] = useState(() => window.innerWidth > 760);
   const log = useRef(null);
   useEffect(() => { log.current.scrollTop = log.current.scrollHeight; }, [thread]);
   const [activity, setActivity] = useState(thread.active_turn);
@@ -85,10 +87,14 @@ function Thread({ thread, thinking, busy, retry, reply, refresh, onError }) {
   }
   const pending = thread.messages.at(-1)?.author !== '@agent';
   return <section id="thread">
-    <Hero label="案件對話" title={thread.program}>
+    <div className="thread-heading">
+      <button className="heading-toggle" aria-label={heroOpen ? '收合案件標題' : '展開案件標題'} aria-expanded={heroOpen} onClick={() => setHeroOpen(!heroOpen)}>{heroOpen ? '⌃' : '⌄'}</button>
+      {heroOpen ? <Hero label="案件對話" title={thread.program}>
       {thread.session_title && <p id="subtitle">{thread.session_title}</p>}
       <p id="meta" title={thread.folder + ' · ' + thread.revision}>{thread.folder} · {thread.revision.slice(0, 8)}</p>
-    </Hero>
+    </Hero> : <h1 className="compact-title">{thread.session_title?.trim() || thread.program}</h1>}
+    </div>
+    <div className="conversation">
     <div id="messages" ref={log} role="log" aria-label="案件對話紀錄">{thread.messages.map(m =>
       <div key={m.id} className={'message ' + (m.author === '@agent' ? 'agent' : 'human')}>
         <strong>{m.author === '@agent' ? '查案助理' : m.author}</strong><ThinkingText text={m.reasoning} />{m.author === '@agent' ? <div className="message-body"><Markdown text={m.body} /></div> : <p className="message-body">{m.body}</p>}
@@ -96,9 +102,15 @@ function Thread({ thread, thinking, busy, retry, reply, refresh, onError }) {
       </div>)}</div>
     {(thinking || activity) && <div id="thinking" role="status"><img src={hoppingScarecrow} width="56" height="56" alt="" />查案助手正在調查… <button type="button" disabled={!activity || stopping} onClick={stop}>{stopping ? '正在終止…' : '終止查案'}</button></div>}
     {(thinking || activity) && <ThinkingText key={activity} text={reasoning} />}
-    {pending
+    </div>
+    <aside className="reply-panel" aria-label="回覆案件">
+      <button aria-expanded={replyOpen} aria-controls="reply-content" onClick={() => setReplyOpen(!replyOpen)}>{replyOpen ? '收合回覆 ›' : '‹ 回覆'}</button>
+      <div id="reply-content" hidden={!replyOpen}>
+      {pending
       ? <button id="retry" disabled={busy || !!activity} onClick={retry}>重新取得回覆</button>
       : <MessageForm busy={busy} onSend={reply} onError={onError} />}
+      </div>
+    </aside>
   </section>;
 }
 
@@ -106,6 +118,7 @@ function App() {
   const [user, setUser] = useState(undefined);
   const [cases, setCases] = useState([]);
   const [programs, setPrograms] = useState([]);
+  const [casesOpen, setCasesOpen] = useState(() => window.innerWidth > 760);
   const [view, setView] = useState('intake');
   const [thread, setThread] = useState(null);
   const [model, setModel] = useState('');
@@ -225,7 +238,9 @@ function App() {
     </header>
     <main><p id="status" role="status">{status}</p>
       {user === null && <Login />}
-      {user && <div id="workspace"><aside>
+      {user && <div id="workspace" className={view === 'thread' && !casesOpen ? 'cases-closed' : ''}><aside className="case-panel">
+        {view === 'thread' && <button aria-expanded={casesOpen} aria-controls="case-controls" onClick={() => setCasesOpen(!casesOpen)}>{casesOpen ? '‹ 收合案件列表' : '案件 ›'}</button>}
+        <div id="case-controls" hidden={view === 'thread' && !casesOpen}>
         <button id="new" disabled={busy} onClick={() => switchView('intake')}>＋ 建立案件</button>
         <input id="case-search" type="search" aria-label="搜尋案件對話" placeholder="搜尋程式名稱或對話標題"
           value={query} onChange={e => setQuery(e.target.value)} />
@@ -240,6 +255,7 @@ function App() {
           <button id="model-settings" aria-current={view === 'model'} disabled={busy}
             onClick={openModelSettings}>查案模型設定</button>
         </nav>}
+        </div>
       </aside><article>
         {view === 'model' && user.admin && <section>
           <Hero label="管理員" title="查案模型設定" />
