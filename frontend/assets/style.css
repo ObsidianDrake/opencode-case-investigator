@@ -102,8 +102,12 @@ small { margin-left: 4px; font-weight: 500; font-size: 12px; color: var(--brick)
 #programs > div { display: flex; align-items: center; gap: 8px; padding: 13px 0; }
 #programs > div + div { border-top: 1px solid var(--line); }
 #programs .mapping-name { flex: 1; min-width: 0; overflow-wrap: anywhere; font-family: var(--mono); }
-#programs button, #mapping > button { flex: none; }
-#mapping > button + button { margin-left: 10px; }
+#programs button { flex: none; }
+.program-toolbar, .program-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.program-dialog { width: min(560px, 92vw); max-height: 90vh; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--sheet); color: var(--ink); }
+.program-dialog::backdrop { background: rgb(32 28 22 / 45%); }
+.program-dialog #mapping { margin: 0; border: 0; box-shadow: none; }
+.program-dialog h2 { margin-top: 0; }
 @media (min-width: 761px) {
   #root:has(#workspace) {
     display: grid;

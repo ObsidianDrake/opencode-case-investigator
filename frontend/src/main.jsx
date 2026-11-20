@@ -473,7 +473,7 @@ function App() {
         {view === 'thread' && thread && <Thread key={thread.id} thread={thread} thinking={!!currentCase?.running} turnError={currentCase?.turnError} busy={busy}
           refresh={() => refreshCase(thread.id)} retry={() => turn(thread.id)} reply={data => turn(thread.id, data)} onError={setStatus} />}
         {view === 'admin' && user.admin && <section id="admin"><Hero label="管理員" title="程式索引" />
-          <ProgramIndex searchRepos={searchRepos} loadSkills={loadSkills} programs={programs} busy={busy}
+          <ProgramIndex status={status} searchRepos={searchRepos} loadSkills={loadSkills} programs={programs} busy={busy}
             save={(name, values) => changeProgram(name, { method: name ? 'PUT' : 'POST',
               headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values) })}
             remove={name => changeProgram(name, { method: 'DELETE' })} />
