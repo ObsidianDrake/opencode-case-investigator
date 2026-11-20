@@ -85,6 +85,13 @@ h1 { margin: 6px 0; font: 800 clamp(27px, 3vw, 42px)/1.22 var(--serif); letter-s
 #report, #mapping, #model-form { margin-top: 18px; padding: clamp(18px, 2.6vw, 32px); }
 form > label { display: block; margin-bottom: 16px; font-weight: 650; }
 small { margin-left: 4px; font-weight: 500; font-size: 12px; color: var(--brick); }
+article:has(> #intake:not([hidden])), #intake, #report, #report .draft {
+  display: flex;
+  flex-direction: column;
+}
+#intake, #report, #report .draft, #report textarea { flex: 1 0 auto; }
+#intake { margin-block: 0; }
+#report textarea { min-height: 7lh; }
 #report label[for=description] { margin-bottom: 6px; }
 .draft { padding: 9px 12px; background: #fffdf7; }
 .draft:focus-within { outline: 2px solid #376a59; outline-offset: 1px; }
