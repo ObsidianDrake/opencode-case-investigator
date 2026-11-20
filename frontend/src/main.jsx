@@ -419,12 +419,20 @@ function App() {
     });
   }
 
+  function startInvestigation() {
+    return switchView('intake');
+  }
+
+  const brand = <><img className="brandmark" src={scarecrow} alt="" /><strong>DRC查案助手</strong></>;
   const currentCase = cases.find(c => c.id === thread?.id);
   const filter = query.trim().toLocaleLowerCase();
   const visible = cases.filter(c => [c.program, caseTitle(c), caseSubtitle(c)].some(v => v.toLocaleLowerCase().includes(filter)));
   return <>
     <header>
-      <div className="brand"><img className="brandmark" src={scarecrow} alt="" /><strong>DRC查案助手</strong></div>
+      {user
+        ? <button type="button" className="brand" disabled={busy} onClick={startInvestigation}
+            aria-label="DRC查案助手，開始新的調查" title="開始新的調查">{brand}</button>
+        : <div className="brand">{brand}</div>}
       {user === null && <span className="login-access"><i aria-hidden="true" />內部使用</span>}
       {user && <><span className="account">{user.login}</span><button disabled={busy} onClick={() => act(async () => {
         await api('logout', { method: 'POST' }); location.reload();
@@ -444,7 +452,7 @@ function App() {
         {view === 'thread' && <PanelToggle side="left" open={casesOpen} controls="case-controls" label="案件列表"
           onClick={() => setCasesOpen(!casesOpen)} />}
         <div id="case-controls" hidden={view === 'thread' && !casesOpen}>
-        <button id="new" disabled={busy} onClick={() => switchView('intake')}>＋ 建立案件</button>
+        <button id="new" disabled={busy} onClick={startInvestigation}>＋ 建立案件</button>
         <input id="case-search" type="search" aria-label="搜尋案件對話" placeholder="搜尋程式名稱或對話標題"
           value={query} onChange={e => setQuery(e.target.value)} />
         <h2>案件對話</h2><nav id="cases">{visible.map(c => <div className="case-row" key={c.id}><button className="case-link" disabled={busy}
