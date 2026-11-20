@@ -10,8 +10,22 @@ const renderFence = parser.renderer.rules.fence;
 parser.renderer.rules.fence = (tokens, index, ...args) => {
   const block = renderFence(tokens, index, ...args);
   if (tokens[index].info.trim().split(/\s+/)[0] !== 'bash') return block;
-  return '<div class="bash-block"><button type="button" class="copy-bash" aria-live="polite">複製</button>' + block + '</div>\n';
+  return `<div class="bash-block"><button type="button" class="copy-bash" title="複製 Bash 指令" aria-label="複製 Bash 指令">
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <g class="copy-shape"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M15 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h3"/></g>
+      <path class="check-shape" d="m4 12 5 5L20 6"/>
+    </svg></button><span class="copy-status" role="status"></span>${block}</div>\n`;
 };
+
+function showCopyResult(button, copied) {
+  button.dataset.result = copied ? 'success' : 'manual';
+  button.nextElementSibling.textContent = copied ? '已複製' : '請手動複製';
+  clearTimeout(button.copyTimer);
+  button.copyTimer = setTimeout(() => {
+    delete button.dataset.result;
+    button.nextElementSibling.textContent = '';
+  }, 2400);
+}
 
 async function copyBash(event) {
   const button = event.target.closest('.copy-bash');
@@ -20,7 +34,7 @@ async function copyBash(event) {
   if (navigator.clipboard?.writeText) {
     try {
       await navigator.clipboard.writeText(code.textContent);
-      button.textContent = '已複製';
+      showCopyResult(button, true);
       return;
     } catch {
       // Restricted clipboard access can still allow copying a selection.
@@ -31,13 +45,13 @@ async function copyBash(event) {
   try {
     if (document.execCommand('copy')) {
       selection.removeAllRanges();
-      button.textContent = '已複製';
+      showCopyResult(button, true);
       return;
     }
   } catch {
     // Leave the commands selected for manual copying.
   }
-  button.textContent = '請手動複製';
+  showCopyResult(button, false);
 }
 
 export default memo(function Markdown({ text }) {

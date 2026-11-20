@@ -4,7 +4,7 @@ import SearchPicker from './SearchPicker';
 
 const programOrder = new Intl.Collator('en', { sensitivity: 'base' });
 
-export default function MessageForm({ programs, busy, onSend, onError }) {
+export default function MessageForm({ programs, busy, onSend, onError, draftRef }) {
   const intake = programs !== undefined;
   const programNames = useMemo(
     () => (programs || []).map(program => program.name).sort(programOrder.compare),
@@ -15,7 +15,8 @@ export default function MessageForm({ programs, busy, onSend, onError }) {
   const selectedProgram = programNames.includes(program) ? program : '';
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState('');
-  const textarea = useRef(null);
+  const localDraft = useRef(null);
+  const textarea = draftRef || localDraft;
 
   useEffect(() => {
     if (!file) {

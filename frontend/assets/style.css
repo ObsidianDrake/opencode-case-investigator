@@ -262,6 +262,8 @@ body:has(#login:not([hidden])) header {
 .thinking-full { max-height: min(28vh, 240px); overflow: auto; }
 .thinking-preview { max-height: 4.35em; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
 
+.quote-selection { position: fixed; z-index: 4; height: 34px; padding: 0 10px; font-size: 14px; color: var(--sheet); background: var(--ink); box-shadow: 0 2px 6px #332f2733; }
+.quote-selection:hover { background: var(--brick); }
 .markdown { white-space: normal; overflow-wrap: anywhere; line-height: 1.55; }
 .markdown > :first-child { margin-top: 0; }
 .markdown > :last-child { margin-bottom: 0; }
@@ -273,9 +275,16 @@ body:has(#login:not([hidden])) header {
 .markdown code { font: .92em var(--mono); background: #eee6d6; padding: .1em .25em; border-radius: 3px; }
 .markdown pre { overflow-x: auto; padding: .7em; background: #eee6d6; border-radius: 4px; }
 .markdown pre code { padding: 0; white-space: pre; }
-.markdown .bash-block { display: grid; min-width: 0; margin: .55em 0; background: #eee6d6; border-radius: 4px; }
-.markdown .copy-bash { justify-self: end; margin: 4px 6px 0; padding: 2px 8px; min-height: 26px; font-size: .82em; }
-.markdown .bash-block pre { min-width: 0; margin: 0; padding-top: .3em; }
+.markdown .bash-block { --code-bg: #eee6d6; position: relative; min-width: 0; margin: .55em 0; }
+.markdown .bash-block pre { min-width: 0; margin: 0; padding: .65em .8em; background: var(--code-bg); }
+.markdown .bash-block code { display: block; width: max-content; padding-inline-end: 36px; }
+.markdown .copy-bash { position: absolute; z-index: 1; top: 3px; right: 3px; width: 32px; height: 32px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 4px; color: #645a48; background: var(--code-bg); }
+.copy-bash::before { content: ''; position: absolute; inset: 0 100% 0 auto; width: 22px; background: linear-gradient(to right, transparent, var(--code-bg)); pointer-events: none; }
+.markdown .copy-bash:is(:hover,:focus-visible) { background: #e0d4bd; color: var(--ink); }
+.copy-bash .check-shape, .copy-bash[data-result="success"] .copy-shape { display: none; }
+.copy-bash[data-result="success"] .check-shape { display: block; color: #38624a; }
+.copy-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.copy-bash[data-result="manual"] + .copy-status { top: 4px; right: 39px; width: auto; height: auto; clip-path: none; padding: 2px 6px; background: var(--sheet); font-size: .85em; }
 .markdown blockquote { padding-left: .8em; border-left: 3px solid var(--line); color: var(--muted); }
 .markdown table { display: block; overflow-x: auto; border-collapse: collapse; }
 .markdown :is(th,td) { border: 1px solid var(--line); padding: .25em .55em; }

@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import Markdown from './Markdown';
 import MessageForm from './MessageForm';
+import QuoteSelection from './QuoteSelection';
+import { flushSync } from 'react-dom';
 import ProgramIndex from './ProgramIndex';
 import scarecrow from '../assets/scarecrow.png';
 import hoppingScarecrow from '../assets/scarecrow-hop.gif';
@@ -103,6 +105,25 @@ function Thread({ thread, thinking, turnError, busy, retry, reply, refresh, onEr
   useEffect(() => { if (!running) setRunningReplyOpen(false); }, [running]);
   const manualHeading = useRef(false);
   const log = useRef(null);
+  const replyDraft = useRef(null);
+  function appendQuote(text) {
+    const draft = replyDraft.current;
+    if (!draft) return false;
+    const separator = draft.value && (draft.value.endsWith('\n\n') ? '' : draft.value.endsWith('\n') ? '\n' : '\n\n');
+    const citation = '引用查案助理先前的回覆：\n' + text.split('\n').map(line => '> ' + line).join('\n');
+    const addition = separator + citation + '\n\n';
+    if (draft.value.length + addition.length > draft.maxLength) {
+      onError('加入引用後會超過 16000 字，請縮短選取範圍或草稿。');
+      return false;
+    }
+    flushSync(() => setIdleReplyOpen(true));
+    draft.setRangeText(addition, draft.value.length, draft.value.length, 'end');
+    window.getSelection()?.removeAllRanges();
+    draft.focus();
+    draft.setSelectionRange(draft.value.length, draft.value.length);
+    draft.scrollTop = draft.scrollHeight;
+    return true;
+  }
   useLayoutEffect(() => {
     if (!heroOpen || manualHeading.current) return;
     const messages = log.current;
@@ -163,6 +184,7 @@ function Thread({ thread, thinking, turnError, busy, retry, reply, refresh, onEr
         <strong>{m.author === '@agent' ? '查案助理' : m.author}</strong><ThinkingText text={m.reasoning} />{m.author === '@agent' ? <div className="message-body"><Markdown text={m.body} /></div> : <p className="message-body">{m.body}</p>}
         {m.image && <img src={m.image} alt="案件附件" />}
       </div>)}</div>
+    {thread.can_reply && !pending && !running && !busy && <QuoteSelection log={log} onAdd={appendQuote} />}
     {turnError && <p role="alert">{turnError}</p>}
     {(thinking || activity) && <div id="thinking" role="status"><img src={hoppingScarecrow} width="56" height="56" alt="" />查案助手正在調查… {thread.can_reply && <button type="button" disabled={!activity || stopping} onClick={stop}>{stopping ? '正在終止…' : '終止查案'}</button>}</div>}
     {(thinking || activity) && <>
@@ -177,7 +199,7 @@ function Thread({ thread, thinking, turnError, busy, retry, reply, refresh, onEr
       <div id="reply-content" hidden={!replyOpen}>
       {pending
       ? <button id="retry" disabled={busy || running} onClick={retry}>重新取得回覆</button>
-      : <MessageForm busy={busy || running} onSend={reply} onError={onError} />}
+      : <MessageForm draftRef={replyDraft} busy={busy || running} onSend={reply} onError={onError} />}
       </div>
     </aside>}
   </section>;
