@@ -273,6 +273,9 @@ body:has(#login:not([hidden])) header {
 .markdown code { font: .92em var(--mono); background: #eee6d6; padding: .1em .25em; border-radius: 3px; }
 .markdown pre { overflow-x: auto; padding: .7em; background: #eee6d6; border-radius: 4px; }
 .markdown pre code { padding: 0; white-space: pre; }
+.markdown .bash-block { display: grid; min-width: 0; margin: .55em 0; background: #eee6d6; border-radius: 4px; }
+.markdown .copy-bash { justify-self: end; margin: 4px 6px 0; padding: 2px 8px; min-height: 26px; font-size: .82em; }
+.markdown .bash-block pre { min-width: 0; margin: 0; padding-top: .3em; }
 .markdown blockquote { padding-left: .8em; border-left: 3px solid var(--line); color: var(--muted); }
 .markdown table { display: block; overflow-x: auto; border-collapse: collapse; }
 .markdown :is(th,td) { border: 1px solid var(--line); padding: .25em .55em; }
