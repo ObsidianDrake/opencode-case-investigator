@@ -3,7 +3,7 @@
 ## 架構與交付
 
 - 前端使用 React 元件與 Vite，程式放在 `frontend/src/`。由 React state 管理表單、附件及案件狀態。保留繁體中文、移動城堡視覺，以及等待查案時跳動的稻草人。
-- 後端位於 `backend/`，使用 Python **3.9.10**、Flask、Waitress 和 SQLite。建置、測試、啟動與 PyInstaller 打包都透過根目錄 Makefile，Python 虛擬環境放在 `backend/venv/`。
+- 後端位於 `backend/`，使用 Python **3.9**、Flask、Waitress 和 SQLite。建置、測試、啟動與 PyInstaller 打包都透過根目錄 Makefile，Python 虛擬環境放在 `backend/venv/`。
 - Vite 產出 `frontend/dist/`。原始碼啟動與單檔執行檔均提供同一份產物。頁面、素材、API、OAuth callback 共用可設定的 Traefik 子路徑 `server.prefix`。請用多層子路徑驗證相對網址。
 - 公開 repository 只收程式與可公開的文件。公司網址、帳密、token、實際案件內容、repo 快取和本機設定留在部署環境。
 
@@ -19,5 +19,5 @@
 
 ## 驗證
 
-- 使用 Python 3.9.10 執行 `make test`。前端或打包流程變更時，執行 `make executable` 並驗證執行檔能在指定子路徑載入 Vite 產物。
+- 使用 Python 3.9 執行 `make test`。前端或打包流程變更時，執行 `make executable` 並驗證執行檔能在指定子路徑載入 Vite 產物。
 - 涉及查案介面的變更，驗證登入、必填欄位、貼圖、案件搜尋、接續對話和管理介面。明確區分模擬上游的測試與公司環境的實際整合驗證。

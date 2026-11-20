@@ -10,6 +10,7 @@ import sqlite3
 import stat
 import sys
 import threading
+import unicodedata
 import uuid
 import tempfile
 import fcntl
@@ -25,7 +26,7 @@ from flask import Flask, abort, g, jsonify, redirect, request, send_from_directo
 from werkzeug.exceptions import HTTPException, ServiceUnavailable
 
 from settings import internal_email, load_settings
-from evidence import PROGRAM, REPOSITORY, case_workspace, private_workspace, run_evidence, source_context
+from evidence import REPOSITORY, case_workspace, private_workspace, run_evidence, source_context
 
 logger = logging.getLogger(__name__)
 
@@ -429,8 +430,12 @@ def create_app(cfg=None):
         if any(fields.get(k) is not None and not isinstance(fields[k], str) for k in keys):
             abort(400, "程式索引欄位格式不符。")
         name, repo, branch, entry, program_path = [(fields.get(k) or "").strip() for k in keys]
-        if not PROGRAM.fullmatch(name):
-            abort(400, "請填寫有效的程式名稱。")
+        if not name:
+            abort(400, "請填寫程式名稱。")
+        if len(name) > 128:
+            abort(400, "程式名稱最多 128 個字元。")
+        if any(unicodedata.category(c) in {"Cc", "Cs", "Zl", "Zp"} for c in name):
+            abort(400, "程式名稱須為單行文字，不能包含控制字元。")
         if repo and not REPOSITORY.fullmatch(repo):
             abort(400, "請選擇有效的 Gitea repository。")
         if repo and branch not in ("main", "master"):
@@ -480,9 +485,14 @@ def create_app(cfg=None):
         return "",204
 
     @route("/api/programs/<name>", methods=["PUT","DELETE"])
-    def change_program(name):
+    @route("/api/programs", methods=["PUT","DELETE"])
+    def change_program(name=None):
         if not g.user["admin"]:
             abort(403)
+        if name is None:
+            name = request.args.get("name")
+            if not name:
+                abort(400, "請指定程式名稱。")
         if request.method == "PUT":
             return save_program(name)
         with db():
@@ -550,7 +560,8 @@ def create_app(cfg=None):
                 evidence += "\n實際程式路徑：" + program_path
             if mapping["repo"]:
                 logger.info("Syncing Gitea repository=%s branch=%s", mapping["repo"], mapping["branch"])
-                revision, source = source_context(state, base, mapping[:3], program, handle, token=repository_token)
+                filename = Path(program_path).name if program_path else program
+                revision, source = source_context(state, base, mapping[:3], filename, handle, token=repository_token)
                 evidence += "\n本案原始碼目錄：" + str(workspace / "source") + "\n版本 " + revision + "\n程式碼\n" + source
             evidence += "\n執行紀錄\n" + logs
             sid = opencode("OpenCode create session", "/session?" + urlencode({"directory":str(folder)}), {"permission": permissions})["id"]

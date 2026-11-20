@@ -13,7 +13,6 @@ from pathlib import Path
 from werkzeug.exceptions import BadRequest, Forbidden, ServiceUnavailable
 
 REPOSITORY = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*/[A-Za-z0-9_-][A-Za-z0-9_.-]*")
-PROGRAM = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.+-]{0,127}")
 
 
 def require_group_write(folder, mode):
@@ -133,7 +132,7 @@ def case_workspace(folder):
             raise Forbidden("查案服務帳號無法建立案件資料夾，請確認 .opencode-tmp 權限。") from None
 
 
-def source_context(state, base, mapping, program, workspace, *, token=None):
+def source_context(state, base, mapping, filename, workspace, *, token=None):
     repo, branch, entry = mapping
     checkout = workspace / "source"
     url = base + "/" + repo + ".git"
@@ -157,7 +156,7 @@ def source_context(state, base, mapping, program, workspace, *, token=None):
     git(checkout, "-c", "core.hooksPath=/dev/null", "checkout", "--detach", commit)
     if not entry:
         paths = git(checkout, "ls-tree", "-rz", "--name-only", commit).decode(errors="replace").split("\0")
-        matches = [p for p in paths if Path(p).name == program]
+        matches = [p for p in paths if Path(p).name == filename]
         if len(matches) == 1:
             entry = matches[0]
     if not entry:

@@ -144,6 +144,25 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual([r["pattern"] for r in remote.call_args.args[2]["permission"]
                           if r["permission"] == "external_directory"], [str(bindir / "*")])
 
+    @patch("app.remote", return_value={"id": "session"})
+    @patch("app.source_context", return_value=("revision", "source"))
+    def test_program_display_name(self, source, remote):
+        self.user(admin=True)
+        name = "設計規則 / DRC（正式版）"
+        program = dict(name=name, program_path=str(self.program_file), repo="tools/demo", branch="main")
+        for invalid in ("  ", "a" * 129, "a\nb"):
+            self.assertEqual(self.api("POST", "programs", json=dict(program, name=invalid)).status_code, 400)
+        self.assertEqual(self.api("POST", "programs", json=program).status_code, 204)
+        self.assertEqual(self.api("GET", "programs").json[0]["name"], name)
+        case = self.api("POST", "cases", data=dict(program=name, folder=str(self.run), text="測試"))
+        self.assertEqual(case.status_code, 201)
+        self.assertEqual(source.call_args.args[3], self.program_file.name)
+        renamed = name + " v2"
+        self.assertEqual(self.api("PUT", "programs", query_string={"name": name},
+                                  json={"name": renamed}).status_code, 204)
+        self.assertEqual(self.api("DELETE", "programs", query_string={"name": renamed}).status_code, 204)
+        self.assertEqual(self.api("GET", "programs").json, [])
+
     def test_program_path_round_trip(self):
         self.user(admin=True)
         for fields in ({}, {"program_path": "  "}):

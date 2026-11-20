@@ -386,7 +386,7 @@ function App() {
 
   function changeProgram(name, options) {
     return act(async () => {
-      await api('programs' + (name ? '/' + encodeURIComponent(name) : ''), options);
+      await api('programs' + (name ? '?name=' + encodeURIComponent(name) : ''), options);
       setPrograms(await api('programs'));
     });
   }

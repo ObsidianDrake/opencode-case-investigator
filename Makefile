@@ -1,20 +1,22 @@
-PYTHON ?= /usr/local/python/3.9.10/bin/python3.9
+PYTHON ?= python3.9
 VENV := backend/venv/bin/python
 NPM ?= npm
 CONFIG ?=
 config_arg = $(if $(CONFIG),--config "$(CONFIG)")
-check_version = "$(1)" -c 'import platform, sys; actual = platform.python_version(); sys.exit(0 if actual == "3.9.10" else "Expected Python 3.9.10, found %s at %s" % (actual, sys.executable))'
 .PHONY: all check-python check-venv venv backend frontend executable package-backend test test-backend run route clean
 all: executable
 check-python:
-	@$(call check_version,$(PYTHON))
+	@"$(PYTHON)" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else "Python 3.9 or newer is required")'
 check-venv: check-python
-	@if test -x "$(VENV)"; then $(call check_version,$(VENV)); fi
+	@if test -f backend/venv/pyvenv.cfg; then \
+		expected=$$("$(PYTHON)" -c 'import sys; print(sys.version_info[:2])') && \
+		"$(VENV)" -c 'import sys; sys.exit(0 if str(sys.version_info[:2]) == sys.argv[1] else "Python version mismatch: recreate backend/venv with the selected PYTHON")' "$$expected"; \
+	fi
 venv: check-venv
-	$(PYTHON) -m venv backend/venv
+	"$(PYTHON)" -m venv backend/venv
 backend: backend/venv/.installed
 backend/venv/.installed: backend/requirements.txt | check-venv
-	$(PYTHON) -m venv backend/venv
+	"$(PYTHON)" -m venv backend/venv
 	$(VENV) -m pip install -r $<
 	touch $@
 frontend/node_modules/.installed: frontend/package.json frontend/package-lock.json
