@@ -131,7 +131,7 @@ def create_app(cfg=None):
     app.config.update(MAX_CONTENT_LENGTH=6*1024*1024,
                       SESSION_COOKIE_NAME="case_session", SESSION_COOKIE_PATH=prefix,
                       SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=urlsplit(public).scheme=="https",
-                      PERMANENT_SESSION_LIFETIME=3600)
+                      PERMANENT_SESSION_LIFETIME=12 * 60 * 60)
     with closing(sqlite3.connect(state / "cases.sqlite")) as db:
         db.executescript(SCHEMA)
         with db:
@@ -254,7 +254,7 @@ def create_app(cfg=None):
         session["user"] = dict(id=profile["id"], login=login_name, admin=profile.get("is_admin") is True)
         if session["user"]["admin"] and not repository_token:
             now = int(time.time())
-            lifetime = int(app.permanent_session_lifetime.total_seconds())
+            lifetime = 60 * 60  # Maximum retention of a repository OAuth credential.
             expires_at = now + min(lifetime, int(token.get("expires_in", lifetime)))
             credential_id = secrets.token_urlsafe(32)
             with db() as conn:

@@ -41,6 +41,18 @@ class ServiceTests(unittest.TestCase):
     def api(self, method, path, **kw):
         return self.client.open(self.prefix+"/api/"+path, method=method, headers={"X-Case-Request":"1"}, **kw)
 
+    @patch("time.time")
+    def test_login_idle_timeout(self, clock):
+        clock.return_value = 1700000000
+        self.user()
+        with self.client.session_transaction(path=self.prefix + "/") as cookie:
+            cookie.permanent = True
+        for idle_hours in (2, 11):
+            clock.return_value += idle_hours * 3600
+            self.assertEqual(self.api("GET", "me").status_code, 200)
+        clock.return_value += 12 * 3600 + 1
+        self.assertEqual(self.api("GET", "me").status_code, 401)
+
     def mapping(self):
         self.user(admin=True)
         data = dict(name="demo",program_path=str(self.program_file),repo="samples/demo",branch="main",entry="demo.py")
