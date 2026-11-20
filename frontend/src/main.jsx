@@ -120,20 +120,22 @@ function Thread({ thread, thinking, turnError, busy, retry, reply, refresh, onEr
   useEffect(() => { log.current.scrollTop = log.current.scrollHeight; }, [thread]);
   const [activity, setActivity] = useState(thread.active_turn);
   const [reasoning, setReasoning] = useState('');
+  const [historyAvailable, setHistoryAvailable] = useState(true);
   const [stopping, setStopping] = useState(false);
   useEffect(() => {
-    if (!thinking && !thread.active_turn) { setActivity(null); setReasoning(''); return; }
+    if (!thinking && !thread.active_turn) { setActivity(null); setReasoning(''); setHistoryAvailable(true); return; }
     let live = true;
     let timer;
     async function poll() {
       try {
-        const { turn_id, reasoning: snapshot } = await api('cases/' + thread.id + '/activity?reasoning=1');
+        const { turn_id, reasoning: snapshot, history_available } = await api('cases/' + thread.id + '/activity?reasoning=1');
         if (live) {
           setActivity(turn_id);
+          setHistoryAvailable(history_available !== false);
           setReasoning(snapshot || '');
           if (!turn_id && !thinking) { await refresh(); return; }
         }
-      } catch (error) { if (live) onError(error.message); }
+      } catch (error) { if (live) { setHistoryAvailable(false); onError(error.message); } }
       if (live) timer = setTimeout(poll, 1500);
     }
     poll();
@@ -163,7 +165,11 @@ function Thread({ thread, thinking, turnError, busy, retry, reply, refresh, onEr
       </div>)}</div>
     {turnError && <p role="alert">{turnError}</p>}
     {(thinking || activity) && <div id="thinking" role="status"><img src={hoppingScarecrow} width="56" height="56" alt="" />查案助手正在調查… {thread.can_reply && <button type="button" disabled={!activity || stopping} onClick={stop}>{stopping ? '正在終止…' : '終止查案'}</button>}</div>}
-    {(thinking || activity) && <ThinkingText key={activity} text={reasoning} />}
+    {(thinking || activity) && <>
+      <ThinkingText key={activity} text={reasoning} />
+      {!historyAvailable ? <small role="status">暫時無法更新思考過程，正在重試…</small>
+        : !reasoning && <small role="status">等候 OpenCode 回傳本回合的思考內容…</small>}
+    </>}
     </div>
     {thread.can_reply && <aside className="reply-panel" aria-label="回覆案件">
       <PanelToggle side="right" open={replyOpen} controls="reply-content" label="回覆欄"

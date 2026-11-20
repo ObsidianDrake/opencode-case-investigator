@@ -584,14 +584,17 @@ def create_app(cfg=None):
             active = active_turns.get(cid)
         if not active or request.args.get("reasoning") != "1":
             return jsonify(turn_id=active["id"] if active else None)
-        update_reasoning(row, active)
+        available = update_reasoning(row, active, recent_only=True)
         with active["lock"]:
-            return jsonify(turn_id=active["id"], reasoning="\n\n".join(active["reasoning"].values()))
+            return jsonify(turn_id=active["id"], history_available=available, reasoning="\n\n".join(active["reasoning"].values()))
 
-    def update_reasoning(row, active):
+    def update_reasoning(row, active, recent_only=False):
+        query = {"directory": row["session_directory"] or row["workspace"]}
+        if recent_only:
+            query["limit"] = 32
         try:
             history = opencode("OpenCode read thinking case=%d" % row["id"],
-                               "/session/" + row["sid"] + "/message?" + urlencode({"directory": row["session_directory"] or row["workspace"]}), timeout=3)
+                               "/session/" + row["sid"] + "/message?" + urlencode(query), timeout=8)
             if isinstance(history, list):
                 with active["lock"]:
                     for item in history:
@@ -600,8 +603,10 @@ def create_app(cfg=None):
                             value = reasoning_text(item)
                             if len(value) > len(active["reasoning"].get(info["id"], "")):
                                 active["reasoning"][info["id"]] = value
+                return True
         except ServiceUnavailable:
             pass
+        return False
 
     def reasoning_text(message):
         return "\n\n".join(part["text"] for part in message.get("parts", [])

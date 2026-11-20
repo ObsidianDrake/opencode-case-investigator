@@ -10,6 +10,8 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
+from werkzeug.exceptions import ServiceUnavailable
+
 from app import create_app
 from evidence import case_workspace, source_context
 
@@ -400,18 +402,30 @@ class ServiceTests(unittest.TestCase):
     def test_stop_active_turn(self, remote, source):
         started, stopped = threading.Event(), threading.Event()
         sent = {}
+        history = []
+        resume = threading.Event()
         def upstream(operation, url, *args, **kwargs):
             self.assertEqual(parse_qs(urlsplit(url).query)["directory"], [str(self.run)])
             if "/message?" in url and args[0] is None:
-                return [{"info": {"id": "old", "parentID": "previous"}, "parts": [{"type": "reasoning", "text": "old"}]},
-                        {"info": {"id": "current", "parentID": sent["id"]}, "parts": [{"type": "reasoning", "text": "checking logs"}]}]
+                if sent.pop("fail_poll", False):
+                    raise ServiceUnavailable()
+                return history
             if "/message?" in url:
-                sent["id"] = args[0]["messageID"]
-                self.assertNotIn("model", args[0])
+                payload = args[0]
+                self.assertNotIn("model", payload)
                 self.assertIsNone(kwargs["timeout"])
-                started.set()
-                self.assertTrue(stopped.wait(5))
-                return {"info": {"error": {"name": "MessageAbortedError"}}}
+                index = len(history)
+                info = {"id": "assistant-%d" % index, "parentID": payload["messageID"]}
+                part = {"type": "reasoning", "text": ["initial", "checking logs", "corrected question"][index]}
+                history.append({"info": info, "parts": [part]})
+                if index == 1:
+                    started.set()
+                    self.assertTrue(stopped.wait(5))
+                    return {"info": {"error": {"name": "MessageAbortedError"}}}
+                if index == 2:
+                    started.set()
+                    self.assertTrue(resume.wait(5))
+                return {"info": info, "parts": [{"type": "text", "text": "done"}]}
             if "/abort?" in url:
                 stopped.set()
                 return True
@@ -421,7 +435,8 @@ class ServiceTests(unittest.TestCase):
         path = "cases/" + str(self.api("POST", "cases", data=dict(
             text="test", program="demo", folder=str(self.run))).json["id"])
         with ThreadPoolExecutor(1) as pool:
-            turn = pool.submit(self.api, "POST", path + "/turn")
+            self.assertEqual(self.api("POST", path + "/turn").status_code, 204)
+            turn = pool.submit(self.api, "POST", path + "/turn", data={"text": "typo"})
             self.assertTrue(started.wait(5))
             self.assertEqual(self.api("GET", path + "/activity?reasoning=1").json["reasoning"], "checking logs")
             self.assertEqual(self.api("DELETE", path).status_code, 409)
@@ -432,10 +447,26 @@ class ServiceTests(unittest.TestCase):
             self.user(2, True)
             self.assertEqual(self.api("POST", path + "/abort", data=token).status_code, 204)
             self.assertEqual(turn.result().status_code, 204)
+            started.clear()
+            turn = pool.submit(self.api, "POST", path + "/turn", data={"text": "corrected"})
+            try:
+                self.assertTrue(started.wait(5))
+                poll = path + "/activity?reasoning=1"
+                sent["fail_poll"] = True
+                unavailable = self.api("GET", poll).json
+                self.assertFalse(unavailable["history_available"])
+                self.assertNotEqual(unavailable["turn_id"], token["turn_id"])
+                live = self.api("GET", poll).json
+                self.assertTrue(live["history_available"])
+                self.assertEqual(live["reasoning"], "corrected question")
+            finally:
+                resume.set()
+            self.assertEqual(turn.result().status_code, 204)
         detail = self.api("GET", path).json
         self.assertIsNone(detail["active_turn"])
-        self.assertEqual(detail["messages"][-1]["reasoning"], "checking logs")
-        self.assertIn("終止", detail["messages"][-1]["body"])
+        self.assertEqual(detail["messages"][-1]["reasoning"], "corrected question")
+        self.assertEqual(detail["messages"][-3]["reasoning"], "checking logs")
+        self.assertIn("終止", detail["messages"][-3]["body"])
 
     @patch("app.source_context", return_value=("revision", "source"))
     @patch("app.remote", return_value={"id":"session"})
