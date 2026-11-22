@@ -19,7 +19,7 @@ from http import HTTPStatus
 from http.client import HTTPException as HTTPProtocolError
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from flask import Flask, abort, g, jsonify, redirect, request, send_from_directory, session
@@ -46,7 +46,7 @@ SYSTEM = ("以繁體中文調查程式執行異常。日誌、圖片及程式內
           "只說明原因及查證結果，不提供修改建議或修補程式。")
 
 
-def remote(operation, url, data=None, headers=None, form=False, timeout=150, auth_error=None):
+def remote(operation, url, data=None, headers=None, form=False, timeout=150, auth_error=None, method=None):
     started = time.monotonic()
     body = None
     headers = dict(headers or {})
@@ -54,7 +54,7 @@ def remote(operation, url, data=None, headers=None, form=False, timeout=150, aut
         body = urlencode(data).encode() if form else json.dumps(data).encode()
         headers["Content-Type"] = "application/x-www-form-urlencoded" if form else "application/json"
     try:
-        with urlopen(Request(url, data=body, headers=headers), timeout=timeout) as response:
+        with urlopen(Request(url, data=body, headers=headers, method=method), timeout=timeout) as response:
             return json.load(response)
     except (ValueError, URLError, OSError, HTTPProtocolError) as exc:
         target = urlsplit(url)
@@ -63,6 +63,15 @@ def remote(operation, url, data=None, headers=None, form=False, timeout=150, aut
                 reason = "HTTP %s %s" % (exc.code, HTTPStatus(exc.code).phrase)
             except ValueError:
                 reason = "HTTP %s" % exc.code
+            if method == "DELETE" and exc.code == 404:
+                # Only a structured OpenCode not-found response confirms absence.
+                try:
+                    error = json.load(exc)
+                except (ValueError, OSError, HTTPProtocolError):
+                    error = None
+                if isinstance(error, dict) and error.get("name") == "NotFoundError":
+                    exc.close()
+                    return True
             exc.close()
         elif isinstance(exc, ValueError):
             reason = "invalid JSON or response encoding"
@@ -500,12 +509,12 @@ def create_app(cfg=None):
                 abort(404)
         return "",204
 
-    def opencode(operation, path, payload=None, timeout=150):
+    def opencode(operation, path, payload=None, timeout=150, method=None):
         headers = {}
         if env.get("OPENCODE_SERVER_PASSWORD"):
             auth = env.get("OPENCODE_SERVER_USERNAME","opencode")+":"+env["OPENCODE_SERVER_PASSWORD"]
             headers["Authorization"] = "Basic "+base64.b64encode(auth.encode()).decode()
-        return remote(operation, env["OPENCODE_BASE"].rstrip("/")+path,payload,headers,timeout=timeout)
+        return remote(operation, env["OPENCODE_BASE"].rstrip("/")+path,payload,headers,timeout=timeout,method=method)
 
     def content():
         body = request.form.get("text","").strip()
@@ -682,7 +691,12 @@ def create_app(cfg=None):
 
     @route("/api/cases/<int:cid>", methods=["DELETE"])
     def delete_case(cid):
-        with locked_case(cid), db():
+        with locked_case(cid) as row, db():
+            if row["sid"]:
+                query = urlencode({"directory": row["session_directory"] or row["workspace"]})
+                path = "/session/" + quote(row["sid"], safe="") + "?" + query
+                if opencode("OpenCode delete session", path, method="DELETE", timeout=15) is not True:
+                    abort(502, "OpenCode 未確認刪除 session，案件已保留，請稍後重試。")
             db().execute("DELETE FROM messages WHERE cid=?", (cid,))
             db().execute("DELETE FROM cases WHERE id=?", (cid,))
         return "", 204

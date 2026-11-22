@@ -249,7 +249,7 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(self.api("GET", "admin/models").json, [
             {"id": "gateway/text", "image_input": False},
             {"id": "gateway/vendor/vision", "image_input": True}])
-        remote.assert_called_once_with("OpenCode list models", "agent/config/providers", None, {}, timeout=10)
+        remote.assert_called_once_with("OpenCode list models", "agent/config/providers", None, {}, timeout=10, method=None)
         remote.return_value = {"providers": []}
         self.assertEqual(self.api("GET", "admin/models").json, [])
         remote.return_value = {}
@@ -476,12 +476,21 @@ class ServiceTests(unittest.TestCase):
         ids = []
         for admin in (False, True):
             self.user()
+            remote.return_value = {"id": "session"}
             cid = self.api("POST", "cases", data=form).json["id"]
             ids.append(cid)
             if admin:
                 self.user(2, True)
             path = "cases/%d" % cid
+            remote.return_value = False
+            self.assertEqual(self.api("DELETE", path).status_code, 502)
+            self.assertEqual(self.api("GET", path).json["messages"][0]["body"], "test")
+            remote.return_value = True
             self.assertEqual(self.api("DELETE", path).status_code, 204)
+            url = urlsplit(remote.call_args.args[1])
+            self.assertTrue(url.path.endswith("/session/session"))
+            self.assertEqual(parse_qs(url.query)["directory"], [str(self.run)])
+            self.assertEqual(remote.call_args.kwargs["method"], "DELETE")
             self.assertEqual(self.api("GET", path).status_code, 404)
             self.assertEqual(self.api("GET", "cases").json, [])
         self.assertGreater(ids[1], ids[0])

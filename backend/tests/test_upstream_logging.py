@@ -10,6 +10,18 @@ from app import remote
 
 
 class UpstreamLoggingTests(unittest.TestCase):
+    def test_retry_session_delete_after_remote_removal(self):
+        url = "http://example.invalid/session/ses_123"
+        for body in (b'{"name":"NotFoundError"}', b"unknown route"):
+            with self.subTest(body=body), patch("app.urlopen", side_effect=HTTPError(
+                    url, 404, "Not Found", {}, io.BytesIO(body))) as send:
+                if body.startswith(b"{"):
+                    self.assertIs(remote("OpenCode delete session", url, method="DELETE"), True)
+                else:
+                    with self.assertRaises(ServiceUnavailable):
+                        remote("OpenCode delete session", url, method="DELETE")
+                self.assertEqual(send.call_args.args[0].get_method(), "DELETE")
+
     def test_failure_reason_without_credentials_or_request_data(self):
         url = "http://example.invalid:4096/session?directory=private-folder"
         failures = [
