@@ -266,12 +266,13 @@ class ServiceTests(unittest.TestCase):
     @patch("app.remote")
     def test_login_returns_to_shared_case(self, remote):
         self.assertEqual(self.api("GET", "cases/42").status_code, 401)
-        self.client.get(self.prefix + "/auth/login?case=42")
+        case_key = "ses_df8a123ABC"
+        self.client.get(self.prefix + "/auth/login?case=" + case_key)
         with self.client.session_transaction(path=self.prefix+"/") as session:
             state = session["state"]
         remote.side_effect = [{"access_token":"test"}, {"id":2, "login":"bob", "email":"bob@internal.invalid"}]
         result = self.client.get(self.prefix+"/auth/callback", query_string={"code":"test", "state":state})
-        self.assertEqual(result.location, self.prefix+"/?case=42")
+        self.assertEqual(result.location, self.prefix+"/?case=" + case_key)
 
     @patch("app.remote")
     def test_external_denied_even_if_admin(self,remote):

@@ -212,7 +212,7 @@ def create_app(cfg=None):
 
     def requested_case_url():
         cid = request.args.get("case", "")
-        return prefix + "/" + ("?case=" + cid if re.fullmatch(r"[1-9][0-9]{0,17}", cid) else "")
+        return prefix + "/" + ("?case=" + cid if re.fullmatch(r"ses_[a-zA-Z0-9_-]+", cid) else "")
 
     @route("")
     def canonical():
@@ -548,7 +548,7 @@ def create_app(cfg=None):
     def cases():
         if request.method == "GET":
             return jsonify([dict(r) for r in db().execute(
-                "SELECT id,author,program,summary,session_title,custom_title,custom_subtitle,(owner=? OR ?) AS can_manage FROM cases ORDER BY id DESC",
+                "SELECT id,sid,author,program,summary,session_title,custom_title,custom_subtitle,(owner=? OR ?) AS can_manage FROM cases ORDER BY id DESC",
                 (g.user["id"], g.user["admin"]))])
         body,image = content()
         program = request.form.get("program","")
@@ -663,7 +663,7 @@ def create_app(cfg=None):
             title = session_title(row)
         with turns_lock:
             turn_id = active_turns.get(cid, {}).get("id")
-        return jsonify(id=cid, custom_title=row["custom_title"], custom_subtitle=row["custom_subtitle"], can_reply=can_manage_case(row),active_turn=turn_id,program=row["program"],session_title=title,folder=row["folder"],revision=row["revision"],messages=messages)
+        return jsonify(id=cid, sid=row["sid"], custom_title=row["custom_title"], custom_subtitle=row["custom_subtitle"], can_reply=can_manage_case(row),active_turn=turn_id,program=row["program"],session_title=title,folder=row["folder"],revision=row["revision"],messages=messages)
 
     @contextmanager
     def locked_case(cid):

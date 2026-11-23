@@ -285,11 +285,11 @@ function App() {
     }
   }
 
-  function setCaseUrl(id, replace = false) {
-    selectedCase.current = id;
+  function setCaseUrl(item, replace = false) {
+    selectedCase.current = item?.id ?? null;
     const url = new URL(location.href);
-    if (id == null) url.searchParams.delete('case');
-    else url.searchParams.set('case', String(id));
+    if (!item) url.searchParams.delete('case');
+    else url.searchParams.set('case', item.sid);
     if (url.href !== location.href) {
       history[replace ? 'replaceState' : 'pushState'](null, '', url);
     }
@@ -302,8 +302,9 @@ function App() {
     setCases(list => list.map(c => c.id === id ? { ...c, session_title: data.session_title } : c));
   }
 
-  async function openCase(id, replace = false) {
-    setCaseUrl(id, replace);
+  async function openCase(item, replace = false) {
+    const id = item.id;
+    setCaseUrl(item, replace);
     setThread(current => current?.id === id ? current : null);
     setView('thread');
     await refreshCase(id);
@@ -318,10 +319,10 @@ function App() {
       setUser(me);
       const requested = new URLSearchParams(location.search).get('case');
       if (requested !== null) {
-        const selected = list.find(item => String(item.id) === requested);
+        const selected = list.find(item => item.sid === requested);
         if (!selected) throw new Error('找不到此案件，請確認分享網址。');
-        await openCase(selected.id, true);
-      } else if (list.length) await openCase(list[0].id, true);
+        await openCase(selected, true);
+      } else if (list.length) await openCase(list[0], true);
     });
     const restorePage = () => location.reload();
     window.addEventListener('popstate', restorePage);
@@ -354,10 +355,10 @@ function App() {
   function createCase(data) {
     return act(async () => {
       const created = await api('cases', { method: 'POST', body: data });
-      const { id, program, session_title, can_reply } = created;
-      setCases(list => [{ id, program, session_title, can_manage: can_reply }, ...list]);
+      const { id, sid, program, session_title, can_reply } = created;
+      setCases(list => [{ id, sid, program, session_title, can_manage: can_reply }, ...list]);
       setCasesOpen(false);
-      setCaseUrl(id);
+      setCaseUrl(created);
       setThread(created);
       setView('thread');
       void turn(id);
@@ -456,7 +457,7 @@ function App() {
         <input id="case-search" type="search" aria-label="搜尋案件對話" placeholder="搜尋程式名稱或對話標題"
           value={query} onChange={e => setQuery(e.target.value)} />
         <h2>案件對話</h2><nav id="cases">{visible.map(c => <div className="case-row" key={c.id}><button className="case-link" disabled={busy}
-          aria-current={view === 'thread' && thread?.id === c.id} onClick={() => act(() => openCase(c.id))}>
+          aria-current={view === 'thread' && thread?.id === c.id} onClick={() => act(() => openCase(c))}>
           <strong>{caseTitle(c)}</strong><span>{caseSubtitle(c)}</span>
         </button>
         {!!c.can_manage && <>
