@@ -10,7 +10,7 @@ FIELDS = {
     "server": {"state_dir": "CASE_STATE", "public_origin": "PUBLIC_ORIGIN", "prefix": "CASE_PREFIX",
                "bind_host": "BIND_HOST", "port": "PORT", "session_secret": "SESSION_SECRET"},
     "gitea": {"url": "GITEA_BASE", "token": "GITEA_TOKEN", "client_id": "GITEA_CLIENT_ID", "client_secret": "GITEA_CLIENT_SECRET"},
-    "opencode": {"url": "OPENCODE_BASE", "model": "OPENCODE_MODEL", "username": "OPENCODE_SERVER_USERNAME",
+    "opencode": {"local_site": "LOCAL_SITE", "url": "OPENCODE_BASE", "model": "OPENCODE_MODEL", "username": "OPENCODE_SERVER_USERNAME",
                  "password": "OPENCODE_SERVER_PASSWORD"},
     "logging": {"directory": "LOG_DIR", "retention_days": "LOG_RETENTION_DAYS"},
     "traefik": {"upstream": "TRAEFIK_UPSTREAM"},
@@ -39,7 +39,7 @@ def load_settings(path=None):
         raise ValueError("Invalid YAML in %s%s" % (filename, location)) from None
     if not isinstance(data, dict):
         raise ValueError("Configuration must be a YAML mapping")
-    settings = {}
+    settings = {"CONFIG_DIR": str(filename.resolve().parent)}
     for section, fields in FIELDS.items():
         values = data.get(section, {})
         if not isinstance(values, dict):
@@ -56,6 +56,7 @@ def load_settings(path=None):
                 elif not isinstance(value, str):
                     raise ValueError("%s.%s must be a string" % (section, key))
                 settings[name] = value
+    settings["SSH_SITES"] = data.get("opencode", {}).get("ssh_sites", {})
     policy = data.get("access_policy")
     if not isinstance(policy, dict):
         raise ValueError("access_policy requires a mapping")

@@ -1,18 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import SearchPicker from './SearchPicker';
+import IntakePicker from './IntakePicker';
 
 const programOrder = new Intl.Collator('en', { sensitivity: 'base' });
 
-export default function MessageForm({ programs, busy, onSend, onError, draftRef }) {
+export default function MessageForm({ programs, sites = [], busy, onSend, onError, draftRef }) {
   const intake = programs !== undefined;
   const programNames = useMemo(
     () => (programs || []).map(program => program.name).sort(programOrder.compare),
     [programs]
   );
   const [program, setProgram] = useState('');
-  const [programError, setProgramError] = useState('');
-  const selectedProgram = programNames.includes(program) ? program : '';
+  const [site, setSite] = useState('');
+  const [invalidField, setInvalidField] = useState('');
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState('');
   const localDraft = useRef(null);
@@ -43,34 +43,50 @@ export default function MessageForm({ programs, busy, onSend, onError, draftRef 
     if (busy) return;
     const form = event.currentTarget;
     const data = new FormData(form);
-    if (intake && !selectedProgram) {
-      setProgramError('請從清單選擇已登錄的程式。');
-      form.querySelector('#program-trigger').focus();
+    if (intake && !programNames.includes(program)) {
+      setInvalidField('program');
+      form.querySelector('#intake-program').focus();
+      return;
+    }
+    if (intake && sites.length > 1 && !sites.includes(site)) {
+      setInvalidField('site');
+      form.elements.site.focus();
+      return;
+    }
+    if (intake && !file && !textarea.current.value.trim()) {
+      onError('請描述遇到的狀況，或附上一張圖片。');
+      textarea.current.focus();
       return;
     }
     if (file) data.set('image', file, file.name || 'capture.png');
     if (await onSend(data)) {
       form.reset();
       setProgram('');
+      setSite('');
+      setInvalidField('');
       select(null);
     }
   }
 
   return <form id={intake ? 'report' : 'reply'} onSubmit={submit}>
     {intake && <>
-      <SearchPicker name="program" label="執行的程式" prompt="選擇程式" placeholder="輸入程式名稱搜尋"
-        emptyMessage="沒有符合的程式" required disabled={busy}
-        value={selectedProgram} validationError={programError} options={programNames}
-        onChange={name => { setProgram(name); setProgramError(''); }} />
+      <IntakePicker name="program" label="執行的程式" placeholder="輸入程式名稱搜尋"
+        names={programNames} value={program} disabled={busy}
+        error={invalidField === 'program' && '請從清單選擇已登錄的程式。'}
+        onChange={name => { setProgram(name); setInvalidField(''); }} />
+      {sites.length > 1 && <IntakePicker name="site" label="執行主機" placeholder="選擇或搜尋執行主機"
+        names={sites} value={site} disabled={busy}
+        error={invalidField === 'site' && '請從清單選擇執行主機。'}
+        onChange={name => { setSite(name); setInvalidField(''); }} />}
       <label>程式執行位置 <small>必填</small>
         <input name="folder" placeholder="執行目錄絕對路徑（需有群組寫入權限）" required />
       </label>
-      <label htmlFor="description">遇到什麼狀況 <small>必填</small></label>
+      <label htmlFor="description">遇到什麼狀況 <small>文字或圖片擇一</small></label>
     </>}
     <div className="draft">
-      <textarea ref={textarea} id={intake ? 'description' : undefined} name="text" required maxLength={16000}
+      <textarea ref={textarea} id={intake ? 'description' : undefined} name="text" required={!intake || !file} maxLength={16000}
         aria-label={intake ? undefined : '補充訊息'}
-        placeholder={intake ? '描述你看到的現象，可在這裡直接貼上截圖…' : '補充訊息，或直接貼上截圖…'}
+        placeholder={intake ? '描述你看到的現象，或直接貼上截圖…' : '補充訊息，或直接貼上截圖…'}
         onPaste={event => {
           const image = Array.from(event.clipboardData.items).find(item => item.type.startsWith('image/'))?.getAsFile();
           if (image) { event.preventDefault(); select(image); }

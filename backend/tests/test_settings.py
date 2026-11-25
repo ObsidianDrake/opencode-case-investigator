@@ -41,6 +41,20 @@ class DeploymentSettingsTests(unittest.TestCase):
         self.assertEqual(self.login(client, "Member@EXAMPLE.INVALID", "y_login").status_code, 302)
         self.assertTrue(client.get("/case-investigator/api/me").json["admin"])
 
+    def test_site_names_from_yaml(self):
+        self.config["opencode"].update(local_site="主站", ssh_sites={
+            "backup": {"name": "備援站", "url": "http://other.invalid", "target": "other"}})
+        self.write_config()
+        client = create_app(load_settings(self.path)).test_client()
+        self.login(client, "alice@example.invalid", "alice")
+        self.assertEqual(client.get("/case-investigator/api/me").json["sites"], ["主站", "備援站"])
+        for label in ("主站", "", " trailing ", None):
+            with self.subTest(label=label):
+                self.config["opencode"]["ssh_sites"]["backup"]["name"] = label
+                self.write_config()
+                with self.assertRaises(ValueError):
+                    create_app(load_settings(self.path))
+
     def test_cookie_survives_restart_and_new_policy_is_enforced(self):
         app = create_app(load_settings(self.path))
         client = app.test_client()

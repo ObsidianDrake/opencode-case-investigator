@@ -110,7 +110,7 @@ function Thread({ thread, thinking, turnError, busy, retry, reply, refresh, onEr
     const draft = replyDraft.current;
     if (!draft) return false;
     const separator = draft.value && (draft.value.endsWith('\n\n') ? '' : draft.value.endsWith('\n') ? '\n' : '\n\n');
-    const citation = '引用查案助理先前的回覆：\n' + text.split('\n').map(line => '> ' + line).join('\n');
+    const citation = '引用先前的回覆：\n' + text.split('\n').map(line => '> ' + line).join('\n');
     const addition = separator + citation + '\n\n';
     if (draft.value.length + addition.length > draft.maxLength) {
       onError('加入引用後會超過 16000 字，請縮短選取範圍或草稿。');
@@ -175,13 +175,13 @@ function Thread({ thread, thinking, turnError, busy, retry, reply, refresh, onEr
       <button className="heading-toggle" aria-label={heroOpen ? '收合案件標題' : '展開案件標題'} aria-expanded={heroOpen} onClick={() => { manualHeading.current = true; setHeroOpen(!heroOpen); }}>{heroOpen ? '⌃' : '⌄'}</button>
       {heroOpen ? <Hero label="案件對話" title={caseTitle(thread)}>
       {caseSubtitle(thread) && <p id="subtitle">{caseSubtitle(thread)}</p>}
-      <p id="meta" title={[thread.folder, thread.revision].filter(Boolean).join(' · ')}>{thread.folder}{thread.revision && ' · ' + thread.revision.slice(0, 8)}</p>
+      <p id="meta" title={[thread.folder, thread.revision].filter(Boolean).join(' · ')}>{thread.site} · {thread.folder}{thread.revision && ' · ' + thread.revision.slice(0, 8)}</p>
     </Hero> : <h1 className="compact-title">{caseSubtitle(thread) || caseTitle(thread)}</h1>}
     </div>
     <div className="conversation">
     <div id="messages" ref={log} role="log" aria-label="案件對話紀錄">{thread.messages.map(m =>
       <div key={m.id} className={'message ' + (m.author === '@agent' ? 'agent' : 'human')}>
-        <strong>{m.author === '@agent' ? '查案助理' : m.author}</strong><ThinkingText text={m.reasoning} />{m.author === '@agent' ? <div className="message-body"><Markdown text={m.body} /></div> : <p className="message-body">{m.body}</p>}
+        <strong>{m.author === '@agent' ? '查案助理' : m.author}</strong><ThinkingText text={m.reasoning} />{m.author === '@agent' ? <div className="message-body"><Markdown text={m.body} /></div> : m.body && <p className="message-body">{m.body}</p>}
         {m.image && <img src={m.image} alt="案件附件" />}
       </div>)}</div>
     {thread.can_reply && !pending && !running && !busy && <QuoteSelection log={log} onAdd={appendQuote} />}
@@ -505,7 +505,7 @@ function App() {
         </section>}
 
         <section id="intake" hidden={view !== 'intake'}><Hero label="查案助理" title="開始新的調查" />
-          <MessageForm programs={programs} busy={busy} onSend={createCase} onError={setStatus} />
+          <MessageForm sites={user.sites} programs={programs} busy={busy} onSend={createCase} onError={setStatus} />
         </section>
         {view === 'thread' && thread && <Thread key={thread.id} thread={thread} thinking={!!currentCase?.running} turnError={currentCase?.turnError} busy={busy}
           refresh={() => refreshCase(thread.id)} retry={() => turn(thread.id)} reply={data => turn(thread.id, data)} onError={setStatus} />}

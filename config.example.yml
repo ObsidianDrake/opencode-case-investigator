@@ -23,10 +23,23 @@ access_policy:
     - "y_"
 
 opencode:
+  local_site: "local"             # 報案頁顯示的本機名稱，可自行修改
   url: "http://127.0.0.1:4096"   # OpenCode Server
   # model: "provider/model-id"     # 選填；model ID 本身可含斜線
   # username: "opencode"          # 啟用 Basic Auth 時填入
   # password: ""
+  # 本機使用上面的 url，在網站主機處理檔案。啟用第二個站點後，報案時須選主機。
+  # ssh_sites:
+  #   remote:                    # 固定代號，供既有案件與程式索引定位站點
+  #     name: "remote"            # 顯示名稱，省略時使用上方代號
+  #     url: "http://remote.example.invalid:4096"
+  #     target: "investigator@remote.example.invalid"  # 可用 ~/.ssh/config 別名
+  #     python: "/usr/local/python/3.9.10/bin/python3.9"  # 遠端主機上的直譯器絕對路徑，省略時使用 python3
+  #     ssh_password: ""          # SSH 登入密碼；留空使用既有 SSH key／agent
+  #     host_key_checking: "accept-new"  # 首次連線保存金鑰；省略時使用 strict
+  #     known_hosts: "/var/lib/case-investigator/ssh_known_hosts"  # 選填
+  #     username: "opencode"  # 選填，預設沿用上方 OpenCode 帳密
+  #     password: ""
 
 traefik:
   upstream: "http://127.0.0.1:8000"  # 從 Traefik 主機看到的服務位址

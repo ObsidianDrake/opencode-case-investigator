@@ -28,7 +28,7 @@ executable: frontend
 executable package-backend: backend
 	$(VENV) -m pip install 'pyinstaller==6.22.3'
 	@$(VENV) -c 'import platform, sys, PyInstaller; print("Python %s (%s), PyInstaller %s" % (platform.python_version(), sys.executable, PyInstaller.__version__))'
-	cd backend && venv/bin/python -m PyInstaller --clean --noconfirm --onefile --name case-investigator --add-data '../frontend/dist:frontend/dist' run_api.py
+	cd backend && venv/bin/python -m PyInstaller --clean --noconfirm --onefile --name case-investigator --add-data '../frontend/dist:frontend/dist' --add-data 'ssh-askpass:.' --add-data 'evidence.py:.' run_api.py
 test: frontend
 test test-backend: backend
 	cd backend && venv/bin/python -m unittest discover -s tests -v

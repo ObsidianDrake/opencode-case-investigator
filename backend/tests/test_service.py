@@ -1,4 +1,8 @@
 import io
+import json
+import os
+import shlex
+import sys
 import re
 import sqlite3
 import subprocess
@@ -13,7 +17,8 @@ from urllib.parse import parse_qs, urlsplit
 from werkzeug.exceptions import ServiceUnavailable
 
 from app import create_app
-from evidence import case_workspace, source_context
+from evidence import prepare, write_image
+from site_workspace import configured_sites, ssh_call
 
 
 class ServiceTests(unittest.TestCase):
@@ -31,7 +36,7 @@ class ServiceTests(unittest.TestCase):
         env = dict(CASE_STATE=str(self.root/"state"), CASE_PREFIX=self.prefix,
                    GITEA_BASE="gitea", PUBLIC_ORIGIN="public", GITEA_CLIENT_ID="id",
                    GITEA_CLIENT_SECRET="test", INTERNAL_DOMAINS="internal.invalid",
-                   SESSION_SECRET="test-only", OPENCODE_BASE="agent")
+                   SESSION_SECRET="test-only", LOCAL_SITE="main-lab", OPENCODE_BASE="agent")
         self.env = env
         self.client = create_app(env).test_client()
 
@@ -59,6 +64,157 @@ class ServiceTests(unittest.TestCase):
         self.user(admin=True)
         data = dict(name="demo",program_path=str(self.program_file),repo="samples/demo",branch="main",entry="demo.py")
         self.assertEqual(self.api("POST","programs",json=data).status_code,204)
+
+    def test_ssh_password_separate_from_http_and_helper_payload(self):
+        password = " a'$&測試 "
+        site = dict(target="service@site-b", ssh_password=password,
+                    password="upstream-only")
+        run = subprocess.run
+        def ssh(command, **kwargs):
+            self.assertIn("-oStrictHostKeyChecking=yes", command)
+            self.assertIn("-oBatchMode=no", command)
+            self.assertEqual(shlex.split(command[-1])[0], "python3")
+            self.assertNotIn(password, " ".join(command))
+            self.assertEqual(json.loads(kwargs["input"].split(b"\n", 1)[0]), {"operation": "program", "args": {"path": "/bin/demo"}})
+            env = kwargs["env"]
+            answer = run([env["SSH_ASKPASS"], "Password:"], env=env, capture_output=True, check=True)
+            self.assertEqual(answer.stdout.decode(), password + "\n")
+            return subprocess.CompletedProcess(command, 0, stdout=b'{"result": true}')
+        with patch("site_workspace.subprocess.run", side_effect=ssh):
+            self.assertTrue(ssh_call(site, "program", path="/bin/demo"))
+
+    @patch("site_workspace.subprocess.run")
+    def test_frozen_ssh_uses_original_library_path(self, run):
+        run.return_value.stdout = b'{"result": true}'
+        for original, password in ((None, ""), ("/site/libs", "test-password")):
+            with self.subTest(original=original), patch.dict(os.environ, {"LD_LIBRARY_PATH": "/bundle"}, clear=True), \
+                    patch.object(sys, "frozen", True, create=True):
+                if original is not None:
+                    os.environ["LD_LIBRARY_PATH_ORIG"] = original
+                ssh_call(dict(target="service@site-b", ssh_password=password), "program", path="/bin/demo")
+                self.assertEqual(run.call_args.kwargs["env"].get("LD_LIBRARY_PATH"), original)
+                self.assertEqual(os.environ["LD_LIBRARY_PATH"], "/bundle")
+
+    @patch("site_workspace.subprocess.run")
+    def test_ssh_host_key_policy_and_storage(self, run):
+        run.return_value.stdout = b'{"result": true}'
+        remote = dict(target="service@site-b", url="http://site-b.invalid:4096")
+        env = dict(self.env, CONFIG_DIR=str(self.root), SSH_SITES={"remote-lab": remote})
+        default = Path(self.env["CASE_STATE"]) / "ssh_known_hosts"
+        custom = self.root / "ssh keys" / "hosts"
+        for policy, filename, expected in (("strict", None, None), ("accept-new", None, default),
+                                           ("accept-new", "ssh keys/hosts", custom),
+                                           ("strict", "ssh keys/hosts", custom)):
+            with self.subTest(policy=policy, filename=filename):
+                remote["host_key_checking"] = policy
+                if filename:
+                    remote["known_hosts"] = filename
+                ssh_call(configured_sites(env)["remote-lab"], "program", path="/bin/demo")
+                command = run.call_args.args[0]
+                self.assertIn("-oStrictHostKeyChecking=" + ("yes" if policy == "strict" else policy), command)
+                stores = [arg for arg in command if arg.startswith("-oUserKnownHostsFile=")]
+                self.assertEqual(stores, [] if expected is None else ['-oUserKnownHostsFile="%s"' % expected])
+                if policy == "accept-new":
+                    self.assertTrue(expected.is_file())
+                    self.assertEqual(expected.stat().st_mode & 0o777, 0o600)
+        for invalid in ({"host_key_checking": "no"}, {"known_hosts": "/dev/null"}, {"known_hosts": ""},
+                        {"python": "bin/python"}, {"python": None}, {"python": "/bin/python\n"}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                configured_sites(dict(env, SSH_SITES={"remote-lab": dict(remote, **invalid)}))
+
+    @patch("site_workspace.subprocess.run")
+    def test_ssh_host_key_failure_is_logged_without_remote_output(self, run):
+        site = dict(target="service@site-b", ssh_password="sensitive-password")
+        run.side_effect = subprocess.CalledProcessError(255, ["ssh"], stderr=(
+            b"No ECDSA host key is known for site-b and you have requested strict checking.\n"
+            b"Host key verification failed.\nsensitive-password"))
+        with self.assertLogs("site_workspace", level="ERROR") as logs, self.assertRaises(ServiceUnavailable):
+            ssh_call(site, "inspect", folder="/private/case")
+        self.assertEqual(run.call_args.kwargs["stderr"], subprocess.PIPE)
+        self.assertIn("target=service@site-b operation=inspect exit=255 reason=unknown host key", logs.output[0])
+        self.assertNotIn("sensitive-password", logs.output[0])
+        self.assertNotIn("/private/case", logs.output[0])
+
+    @patch("site_workspace.subprocess.run")
+    def test_create_case_access_log_identifies_503_stage(self, run):
+        self.mapping()
+        env = dict(self.env, SSH_SITES={"remote-lab": dict(target="service@site-b", url="http://site-b.invalid")})
+        self.client = create_app(env).test_client()
+        self.user()
+        inspect = subprocess.CompletedProcess([], 0, stdout=b'{"result":{"folder":"/private","logs":""}}')
+        git_error = subprocess.CompletedProcess([], 0, stdout=b'{"error":"private text","status":503,"reason":"git_failed"}')
+        denied = subprocess.CalledProcessError(255, [], stderr=b"Permission denied (password).")
+        for replies, diagnostic in (([denied], "stage=inspect reason=permission denied"),
+                                    ([inspect, git_error], "stage=prepare reason=git_failed")):
+            with self.subTest(diagnostic=diagnostic), self.assertLogs("app", "ERROR") as logs:
+                run.side_effect = replies
+                response = self.api("POST", "cases", data=dict(site="remote-lab", program="demo", folder="/private", text="private report"))
+                self.assertEqual(response.status_code, 503)
+                line = logs.output[-1]
+                self.assertIn("HTTP POST /tools/cases/api/cases status=503", line)
+                self.assertIn("site=remote-lab " + diagnostic, line)
+                self.assertNotIn("private", line)
+
+    @patch("app.remote")
+    def test_remote_site_workspace_and_session(self, remote):
+        # Run the streamed operation in another process in place of the SSH transport.
+        # The web process must never try to open the submitted folder itself.
+        from site_workspace import subprocess as ssh_subprocess
+        run_command = ssh_subprocess.run
+        interpreter = self.root / "custom runtime" / "python3.9"
+        interpreter.parent.mkdir()
+        interpreter.symlink_to(sys.executable)
+        def run_helper(command, **kwargs):
+            self.assertEqual(command[-2], "service@site-b")
+            self.assertEqual(shlex.split(command[-1])[0], str(interpreter))
+            self.assertIn("-oBatchMode=yes", command)
+            return run_command(shlex.split(command[-1]), cwd=self.root, **kwargs)
+
+        env = dict(self.env, SSH_SITES={"remote-lab": dict(name="Research Lab", target="service@site-b",
+                                                     python=str(interpreter),
+                                                     url="http://site-b.invalid:4096")})
+        self.client = create_app(env).test_client()
+        self.user(admin=True)
+        with patch("site_workspace.subprocess.run", side_effect=run_helper):
+            self.assertEqual(self.api("GET", "me").json["sites"], ["main-lab", "Research Lab"])
+            self.assertEqual(self.api("POST", "programs", json=dict(name="demo", program_path=str(self.program_file))).status_code, 204)
+            self.user()
+            form = dict(program="demo", text="查案", folder=str(self.run))
+            for invalid in ("", "other", "http://unknown"):
+                self.assertEqual(self.api("POST", "cases", data=dict(form, site=invalid)).status_code, 400)
+            form["site"] = "Research Lab"
+            self.run.chmod(0o750)
+            denied = self.api("POST", "cases", data=form)
+            self.assertEqual(denied.status_code, 403)
+            self.assertIn("chmod 775", denied.json["error"])
+            remote.assert_not_called()
+            self.run.chmod(0o770)
+            (self.run / "job.log").write_text("site-b evidence")
+            remote.side_effect = [dict(id="ses_remote"), {"parts":[{"type":"text","text":"done"}]},
+                                  dict(title="test"), True]
+            image = (io.BytesIO(b"\x89PNG\r\n\x1a\nimage"), "log.png")
+            with patch("app.run_evidence", side_effect=AssertionError("used local run root")):
+                created = self.api("POST", "cases", data=dict(form, image=image))
+            self.assertEqual(created.status_code, 201)
+            self.assertEqual(created.json["site"], "Research Lab")
+            env["SSH_SITES"]["remote-lab"]["name"] = "New Lab"
+            self.client = create_app(env).test_client()
+            self.user()
+            case = "cases/" + str(created.json["id"])
+            self.assertEqual(self.api("GET", case).json["site"], "New Lab")
+            with patch("app.write_image", side_effect=AssertionError("used local attachment folder")):
+                self.assertEqual(self.api("POST", case + "/turn").status_code, 204)
+            parts = remote.call_args_list[1].args[2]["parts"]
+            self.assertIn("site-b evidence", parts[0]["text"])
+            attachment = Path(parts[1]["text"].splitlines()[-1])
+            self.assertTrue(attachment.is_file())
+            self.assertEqual(attachment.stat().st_mode & 0o777, 0o660)
+            self.assertEqual(attachment.stat().st_gid, self.run.stat().st_gid)
+            for directory in (attachment.parent, attachment.parent.parent, self.run / ".opencode-tmp"):
+                self.assertEqual(directory.stat().st_mode & 0o777, 0o770)
+            self.assertEqual(self.api("DELETE", case).status_code, 204)
+            for call in remote.call_args_list:
+                self.assertEqual(urlsplit(call.args[1]).netloc, "site-b.invalid:4096")
 
     @patch("app.remote")
     def test_repository_search(self, remote):
@@ -108,7 +264,7 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(remote.call_count, 3)
 
     @patch("app.remote")
-    @patch("app.source_context")
+    @patch("evidence.source_context")
     def test_repository_optional_for_investigation(self, source, remote):
         self.user(admin=True)
         self.assertEqual(self.api("POST", "programs", json={"name": ""}).status_code, 400)
@@ -159,7 +315,7 @@ class ServiceTests(unittest.TestCase):
                           if r["permission"] == "external_directory"], [str(bindir / "*")])
 
     @patch("app.remote", return_value={"id": "session"})
-    @patch("app.source_context", return_value=("revision", "source"))
+    @patch("evidence.source_context", return_value=("revision", "source"))
     def test_program_display_name(self, source, remote):
         self.user(admin=True)
         name = "設計規則 / DRC（正式版）"
@@ -283,7 +439,7 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(self.client.get(self.prefix+"/auth/callback",query_string=dict(code="code",state=state)).status_code,403)
 
     @patch("app.remote")
-    @patch("app.source_context")
+    @patch("evidence.source_context")
     def test_invalid_folder_stops_before_git_or_opencode(self, source, remote):
         self.mapping()
         regular_file = self.run / "run.log"
@@ -318,7 +474,7 @@ class ServiceTests(unittest.TestCase):
         remote.assert_not_called()
 
     @patch("app.remote")
-    @patch("app.source_context", return_value=("revision", "source"))
+    @patch("evidence.source_context", return_value=("revision", "source"))
     def test_selected_skill_permissions(self, source, remote):
         self.mapping()
         catalog = [dict(name="sample", location="/srv/skills/sample/SKILL.md")]
@@ -345,7 +501,28 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("sample", remote.call_args_list[-2].args[2]["system"])
 
     @patch("app.remote")
-    @patch("app.source_context",return_value=("revision","source"))
+    def test_image_only_intake(self, remote):
+        self.user(admin=True)
+        self.api("POST", "programs", json=dict(name="demo", program_path=str(self.program_file)))
+        self.user()
+        form = dict(program="demo", folder=str(self.run))
+        for fields in ({}, {"text": "   "}, {"image": (io.BytesIO(b"bad"), "bad.png")}):
+            self.assertEqual(self.api("POST", "cases", data=dict(form, **fields)).status_code, 400)
+        remote.assert_not_called()
+        remote.side_effect = [{"id": "ses_image"}, {"parts": [{"type": "text", "text": "OK"}]}, {"title": "OK"}]
+        png = b"\x89PNG\r\n\x1a\nexample"
+        created = self.api("POST", "cases", data=dict(form, image=(io.BytesIO(png), "screen.png")))
+        self.assertEqual(created.status_code, 201)
+        message = created.json["messages"][0]
+        self.assertEqual(message["body"], "")
+        self.assertTrue(message["image"].startswith("data:image/png;base64,"))
+        self.assertEqual(self.api("POST", "cases/%d/turn" % created.json["id"]).status_code, 204)
+        instruction = remote.call_args_list[1].args[2]["parts"][-1]["text"]
+        self.assertIn("read", instruction)
+        self.assertEqual(Path(instruction.splitlines()[-1]).read_bytes(), png)
+
+    @patch("app.remote")
+    @patch("evidence.source_context",return_value=("revision","source"))
     def test_case_with_image_admin_continuation(self,source,remote):
         self.client = create_app(dict(self.env, OPENCODE_MODEL="gateway/vendor/vision")).test_client()
         self.mapping()
@@ -368,6 +545,9 @@ class ServiceTests(unittest.TestCase):
             self.assertIn("read", instruction)
             path = Path(filename)
             self.assertEqual(path.parent.name, "attachments")
+            self.assertEqual(path.stat().st_mode & 0o777, 0o660)
+            self.assertEqual(path.parent.stat().st_mode & 0o777, 0o770)
+            self.assertEqual(path.stat().st_gid, self.run.stat().st_gid)
             self.assertEqual(path.suffix, suffix)
             self.assertEqual(path.read_bytes(), expected)
             return path
@@ -398,7 +578,7 @@ class ServiceTests(unittest.TestCase):
         messages = self.api("GET",cid).json["messages"]
         self.assertEqual([m["author"] for m in messages],["alice","@agent","bob","@agent"])
 
-    @patch("app.source_context", return_value=("revision", "source"))
+    @patch("evidence.source_context", return_value=("revision", "source"))
     @patch("app.remote")
     def test_stop_active_turn(self, remote, source):
         started, stopped = threading.Event(), threading.Event()
@@ -469,7 +649,7 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(detail["messages"][-3]["reasoning"], "checking logs")
         self.assertIn("終止", detail["messages"][-3]["body"])
 
-    @patch("app.source_context", return_value=("revision", "source"))
+    @patch("evidence.source_context", return_value=("revision", "source"))
     @patch("app.remote", return_value={"id":"session"})
     def test_delete_case_as_owner_and_admin(self, remote, source):
         self.mapping()
@@ -498,7 +678,7 @@ class ServiceTests(unittest.TestCase):
         with sqlite3.connect(self.root/"state"/"cases.sqlite") as db:
             self.assertEqual(db.execute("SELECT count(*) FROM messages").fetchone()[0], 0)
 
-    @patch("app.source_context", return_value=("revision", "source"))
+    @patch("evidence.source_context", return_value=("revision", "source"))
     @patch("app.remote", return_value={"id":"session"})
     def test_rename_case_permissions_and_original_program(self, remote, source):
         self.mapping()
@@ -531,11 +711,41 @@ class ServiceTests(unittest.TestCase):
         self.user(2)
         result = self.api("GET", "cases/42")
         self.assertEqual(result.json["session_title"], "原案件")
+        self.assertEqual(result.json["site"], "main-lab")
         self.assertFalse(result.json["can_reply"])
         self.user()
         self.assertEqual(self.api("DELETE","cases/42").status_code, 204)
         with sqlite3.connect(self.root/"state"/"cases.sqlite") as db:
             self.assertGreater(db.execute("INSERT INTO cases(owner) VALUES(1)").lastrowid, 42)
+
+    @patch("app.remote", return_value=True)
+    def test_upgrade_with_existing_local_and_remote_site_keys(self, remote):
+        self.mapping()
+        with sqlite3.connect(self.root / "state" / "cases.sqlite") as db:
+            # Reproduce the previously shipped column with its installation-specific local default.
+            db.execute("ALTER TABLE cases RENAME COLUMN site TO unused_site")
+            db.execute("ALTER TABLE cases ADD COLUMN site TEXT NOT NULL DEFAULT 'old-primary'")
+            db.execute("INSERT INTO cases(id, owner, sid) VALUES(41, 1, 'ses_primary')")
+            db.execute("INSERT INTO cases(id, owner, site, sid) VALUES(42, 1, 'worker', 'ses_worker')")
+        env = dict(self.env, LOCAL_SITE="Primary", SSH_SITES={
+            "worker": dict(name="Worker", url="http://worker.invalid", target="worker")})
+        self.client = create_app(env).test_client()
+        self.user()
+        self.assertEqual(self.api("GET", "cases/41").json["site"], "Primary")
+        self.assertEqual(self.api("GET", "cases/42").json["site"], "Worker")
+        self.assertIn("demo", [p["name"] for p in self.api("GET", "programs").json])
+        self.assertEqual(self.api("DELETE", "cases/41").status_code, 204)
+        self.assertTrue(remote.call_args.args[1].startswith(self.env["OPENCODE_BASE"] + "/session/ses_primary?"))
+        # Removing the SSH site must not redirect its old sessions to a similarly named local site.
+        self.client = create_app(dict(self.env, LOCAL_SITE="worker")).test_client()
+        self.user()
+        remote.reset_mock()
+        self.assertEqual(self.api("DELETE", "cases/42").status_code, 503)
+        remote.assert_not_called()
+        self.client = create_app(env).test_client()
+        self.user()
+        self.assertEqual(self.api("DELETE", "cases/42").status_code, 204)
+        self.assertEqual(urlsplit(remote.call_args.args[1]).netloc, "worker.invalid")
 
     @patch("app.remote")
     def test_legacy_session_keeps_original_directory(self, remote):
@@ -557,6 +767,11 @@ class ServiceTests(unittest.TestCase):
         def git(*args):
             subprocess.run(["git","-C",str(repo),*args],check=True,capture_output=True)
         git("init","-b","main")
+        (repo/"run").write_text("#!/bin/sh\n")
+        (repo/"run").chmod(0o755)
+        (repo/"linked").symlink_to(self.program_file)
+        self.program_file.chmod(0o600)
+        git("add", "run", "linked")
         revisions = []
         for value in ("first","second"):
             (repo/"demo").write_text(value)
@@ -565,12 +780,31 @@ class ServiceTests(unittest.TestCase):
             (repo/"helper.py").write_text(value)
             git("add","helper.py")
             git("-c","user.name=Test","-c","user.email=test@invalid","commit","-m","Add helper")
-            with case_workspace(self.run) as (snap, handle):
-                rev, text = source_context(self.root, str(self.root/"repos"),
-                                           ("samples/demo","main",""), "demo", handle)
+            with prepare(self.run, self.root, str(self.root/"repos"),
+                         ("samples/demo","main",""), "demo", None) as prepared:
+                snap = Path(prepared["workspace"])
+                rev, text = prepared["revision"], prepared["source"]
                 self.assertEqual(snap.parent, self.run / ".opencode-tmp")
                 self.assertTrue((snap/"source"/".git").is_dir())
+                self.assertEqual((snap/"source"/"run").stat().st_mode & 0o777, 0o770)
+                self.assertEqual((snap/"source"/"helper.py").stat().st_mode & 0o777, 0o660)
+                self.assertEqual(self.program_file.stat().st_mode & 0o777, 0o600)
+                for path in (snap.parent, snap, *snap.rglob("*")):
+                    if not path.is_symlink():
+                        mode = path.stat().st_mode
+                        self.assertEqual(mode & 0o777, 0o770 if path.is_dir() or mode & 0o100 else 0o660)
+                        self.assertEqual(path.stat().st_gid, self.run.stat().st_gid)
             self.assertEqual((snap/"source"/"helper.py").read_text(),value)
             self.assertIn(value,text)
             revisions.append(rev)
         self.assertNotEqual(*revisions)
+
+    def test_attachment_on_existing_private_case(self):
+        parent = self.run / ".opencode-tmp"
+        workspace = parent / "case-old"
+        for directory in (parent, workspace, workspace / "attachments"):
+            directory.mkdir(mode=0o700)
+        image = Path(write_image(workspace, 3, "data:image/png;base64,YWJj"))
+        self.assertEqual(image.stat().st_mode & 0o777, 0o660)
+        for directory in (parent, workspace, image.parent):
+            self.assertEqual(directory.stat().st_mode & 0o777, 0o770)

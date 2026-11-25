@@ -55,7 +55,7 @@ make run
 - **Session 簽章**保護瀏覽器中本服務的登入 cookie。登入有效期為 12 小時，瀏覽器每次向查案服務發出請求都會續期。首次啟動會在 `server.state_dir` 下的 `cases.sqlite` 自動建立隨機金鑰，後續重啟沿用。此目錄及備份限服務帳號存取。既有部署若要繼續使用原金鑰，可將舊 `SESSION_SECRET` 放入選用欄位 `server.session_secret`。更新前簽發的 cookie 沒有 email 欄位，需重新登入一次；日後更新內部帳號規則並重啟，既有 session 在下次 API 請求也會套用新規則。
 - **Gitea repository 搜尋**使用部署設定的 `gitea.token` 個人存取權杖，列出該 token 可讀取的公開與私有 repository。未設定時，使用目前登入管理員的 Gitea OAuth token；更新後既有管理員需重新登入以授權 `read:repository`。Git 抓取及更新原始碼仍使用 `gitea.token` 或服務帳號既有的 Git 認證。
 - **Gitea 登入回呼**為 `server.public_origin` 加 `server.prefix` 加 `/auth/callback`。將完整回呼登錄到 Gitea OAuth 應用程式，並填入 `gitea.client_id`、`gitea.client_secret`。
-- **上游服務**在 `opencode.url` 填專用 OpenCode Server 的基底位址。可用 `opencode.model` 指定每回合的模型，格式為 `providerID/modelID`，僅以第一個斜線分隔。管理員可在側欄「查案模型設定」從 OpenCode 的 `GET /config/providers` 清單選取模型，寫入 SQLite 後優先於 YAML。新案、追問與重試會在每次送出前讀取，免重啟。兩處均未設定時交由 OpenCode 選擇。若啟用 Basic Auth，設定 `opencode.password` 與選用的 `opencode.username`。後端與 OpenCode 需能以相同絕對路徑存取 run root，OpenCode 也須能讀取案件的私有子目錄（例如以相同服務帳號執行）。
+- **上游服務**在 `opencode.url` 填專用 OpenCode Server 的基底位址。可用 `opencode.model` 指定每回合的模型，格式為 `providerID/modelID`，僅以第一個斜線分隔。管理員可在側欄「查案模型設定」從 OpenCode 的 `GET /config/providers` 清單選取模型，寫入 SQLite 後優先於 YAML。新案、追問與重試會在每次送出前讀取，免重啟。兩處均未設定時交由 OpenCode 選擇。若啟用 Basic Auth，設定 `opencode.password` 與選用的 `opencode.username`。後端與 OpenCode 需能以相同絕對路徑存取 run root，OpenCode 也須能讀取案件子目錄（例如以相同服務帳號執行）。
 
 ## 服務日誌
 
@@ -71,6 +71,22 @@ make run
 
 1. 管理員在「管理程式索引」須填寫程式名稱與含檔名的絕對路徑（後端確認檔案存在後才儲存），可搜尋 Gitea repository。選取 repository 時須指定 main 或 master，並可填入口檔。未指定 repository 時，直接依 run root 的內容查案。Repository 搜尋使用已設定的 Gitea token，未設定時查詢公開清單。同步使用服務帳號預設的 Git credential helper。
 2. 開案時，服務先確認服務帳號可讀取與進入填寫的執行目錄。有選取 repository 時，才將指定分支淺層 clone 至該位置的 `.opencode-tmp/case-*/source/`，每個案件使用獨立目錄，並記錄當時的 commit。未填入口檔時，依程式檔名在對應 repository 內找唯一符合的檔案。
+   新建立的 `.opencode-tmp`、案件目錄與其子目錄使用 run root 的群組，權限為 `770`。一般檔案及附件為 `660`，原本可執行的程式為 `770`。同群組成員可修改檔案、清空案件目錄。刪除 run root 本身還需要其上一層目錄的刪除權限。各站點的服務帳號各自須能將產物設成對應 run root 的群組。
+   舊版已建立的 clone 保留原權限。若要清理含舊案件的 run root，請由產生檔案的服務帳號在對應主機上將舊案件子目錄改成 run root 的群組並給予群組讀、寫、進入權限。
 3. 案件擷取執行位置第一層最多六個 log、err、out 檔，各取末尾 6000 bytes。程式入口最多擷取前 32000 bytes。OpenCode 可以從 run root 檢閱執行資料，也可以依案件提供的原始碼路徑讀取完整 checkout。
-4. 每案有獨立 OpenCode session。首次查案、使用者追問和管理員接手時，後端都指定 `investigate-web` agent。部署時須讓 OpenCode 從使用者提供的 run root 也能載入這個 agent。管理員可在程式索引選填 OpenCode Skills。新案件會將索引中的程式路徑傳給 agent，並允許 `read`、`glob`、`grep` 存取程式所在目錄及子目錄。管理員儲存索引時，也會記錄 symlink 解析後的程式目錄。若舊索引的 symlink 指向另一個目錄，或部署目標更換目錄，請重新儲存索引並開新案。另依所選 Skill 授權其名稱與附檔目錄。Skill 名稱沿用開案時的設定，Bash 指令會直接被拒絕。部署時使用專用且受限的 OpenCode 作業系統帳號，限制可讀取的部署資料範圍。升級前建立的 session 仍使用原快照目錄；要調查 run root 請重新開案。模型和 provider 憑證由 OpenCode 自己管理。每個有圖片的回合會先把原圖寫入該案私有子目錄下的 `attachments/message-<訊息編號>.png` 或 `.jpg`，再傳送文字路徑請 agent 用 `read` 開啟。聊天室預覽沿用 SQLite 中的附件。圖片辨識仍取決於工具與模型的影像能力。
+4. 每案有獨立 OpenCode session。首次查案、使用者追問和管理員接手時，後端都指定 `investigate-web` agent。部署時須讓 OpenCode 從使用者提供的 run root 也能載入這個 agent。管理員可在程式索引選填 OpenCode Skills。新案件會將索引中的程式路徑傳給 agent，並允許 `read`、`glob`、`grep` 存取程式所在目錄及子目錄。管理員儲存索引時，也會記錄 symlink 解析後的程式目錄。若舊索引的 symlink 指向另一個目錄，或部署目標更換目錄，請重新儲存索引並開新案。另依所選 Skill 授權其名稱與附檔目錄。Skill 名稱沿用開案時的設定，Bash 指令會直接被拒絕。部署時使用專用且受限的 OpenCode 作業系統帳號，限制可讀取的部署資料範圍。升級前建立的 session 仍使用原快照目錄；要調查 run root 請重新開案。模型和 provider 憑證由 OpenCode 自己管理。每個有圖片的回合會先把原圖寫入該案子目錄下的 `attachments/message-<訊息編號>.png` 或 `.jpg`，再傳送文字路徑請 agent 用 `read` 開啟。聊天室預覽沿用 SQLite 中的附件。圖片辨識仍取決於工具與模型的影像能力。
 5. 瀏覽器先儲存使用者訊息，再等待該回合回覆。服務使用本機檔案鎖避免同案並行送出。等待 OpenCode 調查回覆沒有應用程式時限。案件擁有者或管理員可以點「終止查案」中止該次回合，再於同案繼續提問。代理層的連線逾時需另行設定。案件及附件保存在部署環境。此版以單機部署為目標。
+
+## 跨主機查案
+
+網站、Gitea 登入、程式索引與 `cases.sqlite` 集中在網站主機。在各站點分別啟動 OpenCode，各自設定獨立的本機資料庫，並部署 `investigate-web`、所選模型與 Skills。管理頁面的模型及 Skill 選項來自本機 OpenCode，建案時會向選定主機確認所選的 Skill。
+
+1. 遠端主機只需啟動 OpenCode。網站主機透過 SSH 使用遠端的 `python3` 和標準函式庫處理檔案，操作結束後程序即退出。遠端的 SSH 帳號應與 OpenCode 使用相同 UID，以便存取案件目錄。有設定 Gitea repository 的案件還需要遠端可執行 Git。
+2. 在網站主機的 `config.yml` 以 `opencode.local_site` 設定本機顯示名稱（省略時為 `local`）。在 `opencode.ssh_sites` 下為每個遠端建立一個固定代號，如 `remote`。可用該項的 `name` 指定顯示名稱，省略時使用代號。各站顯示名稱須唯一。依範例填入 OpenCode URL 和 SSH 目的地。遠端需要 SSH 密碼時設定 `ssh_password`，留空時沿用 SSH key 或 agent。該站的 `username`、`password` 用於 OpenCode HTTP API。含密碼的設定檔請限服務帳號讀取。
+   - 若遠端的非互動式 SSH 環境找不到 `python3`，在該站設定 `python: "/usr/local/python/3.9.10/bin/python3.9"`，換成遠端主機上實際可執行的絕對路徑。省略時沿用 `python3`。
+   - 預設 `host_key_checking: strict`，使用網站服務帳號原有的 OpenSSH 信任設定，主機金鑰須事先登錄。
+   - 設為 `host_key_checking: accept-new` 可在首次連線時信任並保存主機金鑰。預設檔案為網站主機的 `<server.state_dir>/ssh_known_hosts`。兩種模式都會拒絕已變更的金鑰，都可用 `known_hosts` 指定檔案。相對路徑以 `config.yml` 所在目錄為準。
+   - 修改設定後重啟查案網站。若連線失敗，可在 `case-investigator.log` 查詢 SSH 目的地、操作與失敗原因。
+3. 升級時沿用原本的 `server.state_dir`。啟動時在交易內為案件新增站點欄位，尚無站點欄位的舊案件歸屬本機，已有站點的案件保留原有對應，既有程式索引繼續使用。若遠端的程式是指向其他目錄的 symlink，管理員只需重新儲存該筆索引，即可記錄遠端的實體程式目錄並授予讀取權限。升級時保留現有 `ssh_sites` 的鍵及其對應的 OpenCode 資料庫。日後要更名，只改本機的 `local_site` 或遠端的 `name`，既有案件與程式索引會沿用原站點。
+
+使用者報案時選擇執行主機並填寫該機上的絕對路徑。群組寫入權限、log、Gitea clone 與圖片附件均由該機處理。追問、查詢思考過程、終止與刪除都連回案件原站點。遠端 clone 須能從遠端主機存取設定的 Gitea 網址。

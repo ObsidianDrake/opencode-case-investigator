@@ -7,12 +7,10 @@ import re
 import secrets
 import socket
 import sqlite3
-import stat
 import sys
 import threading
 import unicodedata
 import uuid
-import tempfile
 import fcntl
 from contextlib import closing, contextmanager
 from http import HTTPStatus
@@ -26,7 +24,8 @@ from flask import Flask, abort, g, jsonify, redirect, request, send_from_directo
 from werkzeug.exceptions import HTTPException, ServiceUnavailable
 
 from settings import internal_email, load_settings
-from evidence import REPOSITORY, case_workspace, private_workspace, run_evidence, source_context
+from evidence import REPOSITORY, WorkspaceError, inspect_program, run_evidence, write_image
+from site_workspace import configured_sites, prepare_on_site, ssh_call
 
 logger = logging.getLogger(__name__)
 
@@ -87,23 +86,9 @@ def remote(operation, url, data=None, headers=None, form=False, timeout=150, aut
                      time.monotonic() - started)
         if auth_error and isinstance(exc, HTTPError) and exc.code in (401, 403):
             abort(502, auth_error)
-        raise ServiceUnavailable("上游服務無法回應，請稍後重試。") from None
-
-
-def save_turn_image(workspace, message):
-    header, encoded = message["image"].split(",", 1)
-    extension = {"data:image/png;base64": "png", "data:image/jpeg;base64": "jpg"}[header]
-    directory = Path(workspace) / "attachments"
-    directory.mkdir(exist_ok=True, mode=0o700)
-    target = directory / ("message-%d.%s" % (message["id"], extension))
-    with tempfile.NamedTemporaryFile(dir=directory, delete=False) as stream:
-        temporary = Path(stream.name)
-    try:
-        temporary.write_bytes(base64.b64decode(encoded, validate=True))
-        temporary.replace(target)
-    finally:
-        temporary.unlink(missing_ok=True)
-    return target
+        failure = ServiceUnavailable("上游服務無法回應，請稍後重試。")
+        failure.log_reason = reason
+        raise failure from None
 
 
 def create_app(cfg=None):
@@ -169,12 +154,27 @@ def create_app(cfg=None):
                 db.execute(f"INSERT INTO cases({columns}) SELECT {columns} FROM cases_before_share_links")
                 db.execute("DROP TABLE cases_before_share_links")
 
-            existing = {c[1] for c in db.execute("PRAGMA table_info(cases)")}
+            existing = {c[1]: c for c in db.execute("PRAGMA table_info(cases)")}
+            if "site" not in existing:
+                db.execute("ALTER TABLE cases ADD COLUMN site TEXT NOT NULL DEFAULT ''")
+                local_key = ""
+            else:
+                # Previous releases used the column's literal default as the local routing key.
+                # Keep that key for existing sessions, independent of the configured display name.
+                default = existing["site"][4] or ""
+                match = re.fullmatch(r"'([A-Za-z0-9_-]{0,32})'", default)
+                if not match:
+                    raise ValueError("Unrecognized local site default in cases.sqlite")
+                local_key = match.group(1)
+            sites = configured_sites(env, local_key)
+            site_keys = {config["name"]: key for key, config in sites.items()}
             program_columns = {c[1] for c in db.execute("PRAGMA table_info(programs)")}
             if "program_path" not in program_columns:
                 db.execute("ALTER TABLE programs ADD COLUMN program_path TEXT NOT NULL DEFAULT ''")
             if "program_dirs" not in program_columns:
                 db.execute("ALTER TABLE programs ADD COLUMN program_dirs TEXT")
+            if "ssh_program_dirs" not in program_columns:
+                db.execute("ALTER TABLE programs ADD COLUMN ssh_program_dirs TEXT")
             if "skills" not in program_columns:
                 db.execute("ALTER TABLE programs ADD COLUMN skills TEXT NOT NULL DEFAULT '[]'")
             for column in ("custom_title", "custom_subtitle", "skills"):
@@ -195,16 +195,21 @@ def create_app(cfg=None):
     @app.after_request
     def private_response(response):
         route_name = request.url_rule.rule if request.url_rule else "<unmatched>"
+        diagnostic = ""
+        if response.status_code >= 500 and hasattr(g, "case_stage"):
+            diagnostic = " site=%s stage=%s reason=%s" % (g.case_site, g.case_stage, g.get("log_reason") or "unknown")
         logger.log(logging.ERROR if response.status_code >= 500 else logging.INFO,
-                   "HTTP %s %s status=%d elapsed=%.3fs", request.method, route_name,
-                   response.status_code, time.monotonic() - g.started)
+                   "HTTP %s %s status=%d elapsed=%.3fs%s", request.method, route_name,
+                   response.status_code, time.monotonic() - g.started, diagnostic)
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Content-Security-Policy"] = "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'"
         return response
 
+    @app.errorhandler(WorkspaceError)
     @app.errorhandler(HTTPException)
     def error(err):
+        g.log_reason = getattr(err, "log_reason", None)
         return jsonify(error=err.description), err.code
 
     def route(path, **kwargs):
@@ -288,7 +293,7 @@ def create_app(cfg=None):
 
     @route("/api/me")
     def me():
-        return jsonify(g.user)
+        return jsonify(**g.user, sites=list(site_keys))
 
     @route("/api/logout", methods=["POST"])
     def logout():
@@ -339,12 +344,12 @@ def create_app(cfg=None):
                 models[name] = isinstance(inputs, dict) and inputs.get("image") is True
         return jsonify([{"id": name, "image_input": models[name]} for name in sorted(models)])
 
-    def skill_catalog(directory=None, *, detailed=False):
+    def skill_catalog(directory=None, *, detailed=False, site=local_key):
         path = "/api/skill" if detailed else "/skill"
         if directory:
             key = "location[directory]" if detailed else "directory"
             path += "?" + urlencode({key: str(directory)})
-        items = opencode("OpenCode list skills", path, timeout=10)
+        items = opencode("OpenCode list skills", path, timeout=10, site=site)
         if detailed and isinstance(items, dict):
             items = items.get("data")
         if not isinstance(items, list):
@@ -358,7 +363,7 @@ def create_app(cfg=None):
             abort(403)
         return jsonify(sorted(skill_catalog()))
 
-    def case_permissions(names, folder, program_dirs):
+    def case_permissions(names, folder, program_dirs, site):
         rules = [{"permission": "*", "pattern": "*", "action": "deny"}]
         for tool in ("read", "grep", "glob"):
             rules.append({"permission": tool, "pattern": "*", "action": "allow"})
@@ -370,12 +375,12 @@ def create_app(cfg=None):
                 continue
             rules.append({"permission": "external_directory", "pattern": str(path / "*"), "action": "allow"})
         if names:
-            registered = skill_catalog()
-            visible = skill_catalog(folder)
+            registered = skill_catalog(site=site)
+            visible = skill_catalog(folder, site=site)
             if any(not registered.get(name, {}).get("location") or not visible.get(name, {}).get("location")
                    for name in names if name in registered and name in visible):
-                registered = skill_catalog(detailed=True)
-                visible = skill_catalog(folder, detailed=True)
+                registered = skill_catalog(detailed=True, site=site)
+                visible = skill_catalog(folder, detailed=True, site=site)
             for name in names:
                 location = registered.get(name, {}).get("location")
                 if name not in visible or not isinstance(location, str) or visible[name].get("location") != location:
@@ -460,35 +465,43 @@ def create_app(cfg=None):
             if skills and set(skills).difference(skill_catalog()):
                 abort(400, "請選擇已登錄的 OpenCode Skill。")
             skills = json.dumps(list(dict.fromkeys(skills)))
+        previous = db().execute("SELECT * FROM programs WHERE name=?", (old,)).fetchone() if old is not None else None
+        if old is not None:
+            if previous is None:
+                abort(404)
+            if skills is None:
+                skills = previous["skills"]
+            if "program_path" not in fields:
+                program_path = previous["program_path"]
+        if not program_path.strip():
+            abort(400, "請填寫程式路徑。")
+        if not os.path.isabs(program_path):
+            abort(400, "程式路徑必須是包含檔名的絕對路徑。")
+
+        # Pin symlink targets at admin registration, separately on each filesystem.
+        directories = {}
+        missing = None
+        for site, config in sites.items():
+            try:
+                directories[site] = (ssh_call(config, "program", path=program_path)
+                                     if "target" in config else inspect_program(program_path))
+            except (HTTPException, WorkspaceError) as error:
+                if error.code != 400:
+                    raise
+                missing = error
+        if not directories:
+            raise missing
+        local_dirs = directories.pop(local_key, [])
         try:
             with db():
                 db().execute("BEGIN IMMEDIATE")
-                if old is not None and (skills is None or "program_path" not in fields):
-                    previous = db().execute("SELECT skills,program_path FROM programs WHERE name=?", (old,)).fetchone()
-                    if previous:
-                        if skills is None:
-                            skills = previous["skills"]
-                        if "program_path" not in fields:
-                            program_path = previous["program_path"]
-                if not program_path.strip():
-                    abort(400, "請填寫程式路徑。")
-                if not os.path.isabs(program_path):
-                    abort(400, "程式路徑必須是包含檔名的絕對路徑。")
-                try:
-                    mode = os.stat(program_path).st_mode
-                    path = Path(program_path)
-                    # Pin the deployment directories at registration, even if the entry point is a symlink.
-                    program_dirs = [str(path.parent.resolve(strict=True)), str(path.resolve(strict=True).parent)]
-                except (FileNotFoundError, NotADirectoryError):
-                    abort(400, f"找不到程式檔案，請確認完整路徑：{program_path}")
-                except (OSError, RuntimeError, ValueError):
-                    abort(400, f"服務無法確認程式檔案，請檢查路徑與存取權限：{program_path}")
-                if not stat.S_ISREG(mode):
-                    abort(400, f"程式路徑必須指向一般檔案：{program_path}")
-                if old is not None and not db().execute("DELETE FROM programs WHERE name=?", (old,)).rowcount:
-                    abort(404)
-                db().execute("INSERT INTO programs(name,repo,branch,entry,skills,program_path,program_dirs) VALUES(?,?,?,?,?,?,?)",
-                             (name,repo,branch,entry,skills or "[]",program_path,json.dumps(program_dirs)))
+                if previous is not None:
+                    current = db().execute("SELECT * FROM programs WHERE name=?", (old,)).fetchone()
+                    if current != previous:
+                        abort(409, "程式索引已變更，請重新載入後再儲存。")
+                    db().execute("DELETE FROM programs WHERE name=?", (old,))
+                db().execute("INSERT INTO programs(name,repo,branch,entry,skills,program_path,program_dirs,ssh_program_dirs) VALUES(?,?,?,?,?,?,?,?)",
+                             (name,repo,branch,entry,skills or "[]",program_path,json.dumps(local_dirs),json.dumps(directories)))
         except sqlite3.IntegrityError:
             abort(409,"此程式已存在。")
         return "",204
@@ -509,19 +522,28 @@ def create_app(cfg=None):
                 abort(404)
         return "",204
 
-    def opencode(operation, path, payload=None, timeout=150, method=None):
-        headers = {}
-        if env.get("OPENCODE_SERVER_PASSWORD"):
-            auth = env.get("OPENCODE_SERVER_USERNAME","opencode")+":"+env["OPENCODE_SERVER_PASSWORD"]
-            headers["Authorization"] = "Basic "+base64.b64encode(auth.encode()).decode()
-        return remote(operation, env["OPENCODE_BASE"].rstrip("/")+path,payload,headers,timeout=timeout,method=method)
+    def site_config(name):
+        if name not in sites:
+            abort(503, f"案件主機 {name} 未設定。")
+        return sites[name]
 
-    def content():
+    def opencode(operation, path, payload=None, timeout=150, method=None, site=local_key):
+        config = site_config(site)
+        headers = {}
+        password = config.get("password", env.get("OPENCODE_SERVER_PASSWORD"))
+        if password:
+            auth = config.get("username", env.get("OPENCODE_SERVER_USERNAME","opencode"))+":"+password
+            headers["Authorization"] = "Basic "+base64.b64encode(auth.encode()).decode()
+        return remote(operation, config["url"].rstrip("/")+path,payload,headers,timeout=timeout,method=method)
+
+    def content(*, allow_image_only=False):
         body = request.form.get("text","").strip()
-        if not body or len(body)>16000:
-            abort(400,"請填寫狀況或訊息，最多 16000 字。")
-        image = None
         pic = request.files.get("image")
+        if not body and not (allow_image_only and pic):
+            abort(400, "請描述遇到的狀況，或附上一張圖片。" if allow_image_only else "請填寫訊息。")
+        if len(body) > 16000:
+            abort(400, "文字最多 16000 字。")
+        image = None
         if pic:
             data = pic.read()
             if data.startswith(b"\x89PNG\r\n\x1a\n"):
@@ -550,33 +572,52 @@ def create_app(cfg=None):
             return jsonify([dict(r) for r in db().execute(
                 "SELECT id,sid,author,program,summary,session_title,custom_title,custom_subtitle,(owner=? OR ?) AS can_manage FROM cases ORDER BY id DESC",
                 (g.user["id"], g.user["admin"]))])
-        body,image = content()
+        body,image = content(allow_image_only=True)
         program = request.form.get("program","")
-        mapping = db().execute("SELECT repo,branch,entry,skills,program_path,program_dirs FROM programs WHERE name=?",(program,)).fetchone()
+        mapping = db().execute("SELECT repo,branch,entry,skills,program_path,program_dirs,ssh_program_dirs FROM programs WHERE name=?",(program,)).fetchone()
         if not mapping:
             abort(400,"請先選取已登錄的程式。")
         logger.info("Collecting run evidence program=%s", program)
-        folder, logs = run_evidence(request.form.get("folder", ""))
+        site_name = request.form.get("site", sites[local_key]["name"] if len(sites) == 1 else "")
+        if site_name not in site_keys:
+            abort(400, "請選擇有效的執行主機。")
+        site = site_keys[site_name]
+        config = sites[site]
+        g.case_site = site_name
+        g.case_stage = "inspect"
+        raw = request.form.get("folder", "")
         program_path = mapping["program_path"]
-        # Older rows still grant access under the registered path.
-        program_dirs = [str(Path(program_path).parent)] if program_path else []
-        program_dirs.extend(json.loads(mapping["program_dirs"] or "[]"))
-        permissions = case_permissions(json.loads(mapping["skills"]), folder, program_dirs)
-        with case_workspace(folder) as (workspace, handle):
-            revision = ""
+        if "target" in config:
+            info = ssh_call(config, "inspect", folder=raw, program_path=program_path)
+            folder, logs = Path(info["folder"]), info["logs"]
+            program_dirs = json.loads(mapping["ssh_program_dirs"] or "{}").get(site, [])
+        else:
+            folder, logs = run_evidence(raw)
+            program_dirs = json.loads(mapping["program_dirs"] or "[]")
+            if program_path:
+                if len(sites) > 1:
+                    inspect_program(program_path)
+        if program_path:
+            program_dirs.insert(0, str(Path(program_path).parent))
+        g.case_stage = "permissions"
+        permissions = case_permissions(json.loads(mapping["skills"]), folder, program_dirs, site)
+        filename = Path(program_path).name if program_path else program
+        g.case_stage = "prepare"
+        with prepare_on_site(config, folder, state, base, mapping[:3], filename, repository_token) as prepared:
+            workspace, revision = Path(prepared["workspace"]), prepared["revision"]
             evidence = "本案程式：" + program + "\n執行目錄：" + str(folder)
             if program_path:
                 evidence += "\n實際程式路徑：" + program_path
             if mapping["repo"]:
-                logger.info("Syncing Gitea repository=%s branch=%s", mapping["repo"], mapping["branch"])
-                filename = Path(program_path).name if program_path else program
-                revision, source = source_context(state, base, mapping[:3], filename, handle, token=repository_token)
+                source = prepared["source"]
                 evidence += "\n本案原始碼目錄：" + str(workspace / "source") + "\n版本 " + revision + "\n程式碼\n" + source
             evidence += "\n執行紀錄\n" + logs
-            sid = opencode("OpenCode create session", "/session?" + urlencode({"directory":str(folder)}), {"permission": permissions})["id"]
+            g.case_stage = "opencode_session"
+            sid = opencode("OpenCode create session", "/session?" + urlencode({"directory":str(folder)}), {"permission": permissions}, site=site)["id"]
+            g.case_stage = "save_case"
             with db():
-                cid = db().execute("INSERT INTO cases(owner,author,program,folder,summary,revision,sid,evidence,workspace,session_directory,skills) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                    (g.user["id"],g.user["login"],program,str(folder),body[:120],revision,sid,evidence,str(workspace),str(folder),mapping["skills"])).lastrowid
+                cid = db().execute("INSERT INTO cases(owner,author,program,folder,summary,revision,sid,evidence,workspace,session_directory,skills,site) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (g.user["id"],g.user["login"],program,str(folder),body[:120],revision,sid,evidence,str(workspace),str(folder),mapping["skills"],site)).lastrowid
                 db().execute("INSERT INTO messages(cid,author,body,image) VALUES(?,?,?,?)",(cid,g.user["login"],body,image))
         logger.info("Case created case=%d program=%s", cid, program)
         return detail(cid), 201
@@ -603,7 +644,7 @@ def create_app(cfg=None):
             query["limit"] = 32
         try:
             history = opencode("OpenCode read thinking case=%d" % row["id"],
-                               "/session/" + row["sid"] + "/message?" + urlencode(query), timeout=8)
+                               "/session/" + row["sid"] + "/message?" + urlencode(query), timeout=8, site=row["site"])
             if isinstance(history, list):
                 with active["lock"]:
                     for item in history:
@@ -634,7 +675,7 @@ def create_app(cfg=None):
                 abort(409, "此回合已結束。")
             if not active["stopped"]:
                 path = "/session/" + row["sid"] + "/abort?" + urlencode({"directory": row["session_directory"] or row["workspace"]})
-                if opencode("OpenCode abort case=%d" % cid, path, {}, timeout=15) is not True:
+                if opencode("OpenCode abort case=%d" % cid, path, {}, timeout=15, site=row["site"]) is not True:
                     raise ServiceUnavailable("OpenCode 未確認終止，請再試一次。")
                 active["stopped"] = True
                 logger.info("OpenCode abort acknowledged case=%d", cid)
@@ -644,7 +685,7 @@ def create_app(cfg=None):
         if row["session_title"]:
             return row["session_title"]
         try:
-            info = opencode("OpenCode read session title", "/session/" + row["sid"] + "?" + urlencode({"directory": row["session_directory"] or row["workspace"]}), timeout=3)
+            info = opencode("OpenCode read session title", "/session/" + row["sid"] + "?" + urlencode({"directory": row["session_directory"] or row["workspace"]}), timeout=3, site=row["site"])
         except ServiceUnavailable:
             return None
         title = info.get("title") if isinstance(info, dict) else None
@@ -663,7 +704,8 @@ def create_app(cfg=None):
             title = session_title(row)
         with turns_lock:
             turn_id = active_turns.get(cid, {}).get("id")
-        return jsonify(id=cid, sid=row["sid"], custom_title=row["custom_title"], custom_subtitle=row["custom_subtitle"], can_reply=can_manage_case(row),active_turn=turn_id,program=row["program"],session_title=title,folder=row["folder"],revision=row["revision"],messages=messages)
+        site_name = sites.get(row["site"], {}).get("name", row["site"])
+        return jsonify(id=cid, sid=row["sid"], site=site_name, custom_title=row["custom_title"], custom_subtitle=row["custom_subtitle"], can_reply=can_manage_case(row),active_turn=turn_id,program=row["program"],session_title=title,folder=row["folder"],revision=row["revision"],messages=messages)
 
     @contextmanager
     def locked_case(cid):
@@ -695,7 +737,7 @@ def create_app(cfg=None):
             if row["sid"]:
                 query = urlencode({"directory": row["session_directory"] or row["workspace"]})
                 path = "/session/" + quote(row["sid"], safe="") + "?" + query
-                if opencode("OpenCode delete session", path, method="DELETE", timeout=15) is not True:
+                if opencode("OpenCode delete session", path, method="DELETE", timeout=15, site=row["site"]) is not True:
                     abort(502, "OpenCode 未確認刪除 session，案件已保留，請稍後重試。")
             db().execute("DELETE FROM messages WHERE cid=?", (cid,))
             db().execute("DELETE FROM cases WHERE id=?", (cid,))
@@ -716,10 +758,9 @@ def create_app(cfg=None):
                 return "",204
             parts = [{"type":"text","text":"使用者訊息\n"+messages["body"]+"\n調查資料\n"+row["evidence"]}]
             if messages["image"]:
-                workspace = Path(row["workspace"])
-                with private_workspace(workspace) as handle:
-                    target = save_turn_image(handle, messages)
-                    path = workspace / target.relative_to(handle)
+                config = site_config(row["site"])
+                args = dict(workspace=row["workspace"], message_id=messages["id"], image=messages["image"])
+                path = Path(ssh_call(config, "image", **args) if "target" in config else write_image(**args))
                 parts.append({"type": "text", "text": "本回合附有圖片，請使用 read 工具開啟以下圖片檔案，再依據圖片內容回答。若讀取失敗，請說明原因。\n" + str(path)})
                 logger.info("Image ready for OpenCode read case=%d file=%s", cid, path.name)
             # Match the six-byte time prefix of OpenCode ascending message IDs.
@@ -745,7 +786,7 @@ def create_app(cfg=None):
                 try:
                     result = opencode("OpenCode send message case=%d" % cid,
                                       "/session/" + row["sid"] + "/message?" + urlencode({"directory": row["session_directory"] or row["workspace"]}),
-                                      payload, timeout=None)
+                                      payload, timeout=None, site=row["site"])
                     info = result.get("info", {})
                     logger.info("OpenCode reply case=%d providerID=%s modelID=%s", cid,
                                 info.get("providerID", "<unreported>"), info.get("modelID", "<unreported>"))
