@@ -21,6 +21,7 @@ from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from flask import Flask, abort, g, jsonify, redirect, request, send_from_directory, session
+from flask.sessions import SecureCookieSessionInterface
 from werkzeug.exceptions import HTTPException, ServiceUnavailable
 
 from settings import internal_email, load_settings
@@ -28,6 +29,13 @@ from evidence import REPOSITORY, WorkspaceError, inspect_program, run_evidence, 
 from site_workspace import configured_sites, prepare_on_site, ssh_call
 
 logger = logging.getLogger(__name__)
+
+class CaseSessionInterface(SecureCookieSessionInterface):
+    def should_set_cookie(self, app, session):
+        if request.endpoint == "session_status" and not session.modified:
+            return False
+        return super().should_set_cookie(app, session)
+
 
 CASES_TABLE = """CREATE TABLE IF NOT EXISTS cases(id INTEGER PRIMARY KEY AUTOINCREMENT, owner INTEGER, author TEXT, program TEXT,
     folder TEXT, summary TEXT, revision TEXT, sid TEXT, evidence TEXT, workspace TEXT, session_title TEXT, session_directory TEXT);"""
@@ -122,6 +130,7 @@ def create_app(cfg=None):
     callback = public + prefix + "/auth/callback"
     assets = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1])) / "frontend" / "dist"
     app = Flask(__name__, static_folder=None)
+    app.session_interface = CaseSessionInterface()
     app.config.update(MAX_CONTENT_LENGTH=6*1024*1024,
                       SESSION_COOKIE_NAME="case_session", SESSION_COOKIE_PATH=prefix,
                       SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=urlsplit(public).scheme=="https",
@@ -290,6 +299,10 @@ def create_app(cfg=None):
             if request.method not in ("GET","HEAD") and request.headers.get("X-Case-Request") != "1":
                 abort(403)
             g.user = session["user"]
+
+    @route("/api/session-status")
+    def session_status():
+        return jsonify(id=g.user["id"])
 
     @route("/api/me")
     def me():

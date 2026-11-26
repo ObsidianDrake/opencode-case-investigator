@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import Markdown from './Markdown';
-import MessageForm from './MessageForm';
+import MessageForm, { draftKeyFor, readDraft } from './MessageForm';
 import QuoteSelection from './QuoteSelection';
 import { flushSync } from 'react-dom';
 import ProgramIndex from './ProgramIndex';
@@ -14,6 +14,7 @@ async function api(path, options = {}) {
     ...options, headers: { 'X-Case-Request': '1', ...options.headers }
   });
   if (!response.ok) {
+    if (response.status === 401) window.dispatchEvent(new Event('case-login-expired'));
     const details = await response.json().catch(() => ({}));
     const error = new Error(response.status === 401
       ? (path === 'me' ? '' : '登入已逾時，請重新登入 Gitea。')
@@ -96,7 +97,7 @@ function PanelToggle({ side, open, controls, label, onClick }) {
   </button>;
 }
 
-function Thread({ thread, thinking, turnError, busy, retry, reply, refresh, onError }) {
+function Thread({ draftKey, outgoing, thread, thinking, turnError, busy, retry, reply, refresh, onError }) {
   const [heroOpen, setHeroOpen] = useState(true);
   const running = Boolean(thinking || thread.active_turn);
   const [idleReplyOpen, setIdleReplyOpen] = useState(() => window.innerWidth > 760);
@@ -118,6 +119,7 @@ function Thread({ thread, thinking, turnError, busy, retry, reply, refresh, onEr
     }
     flushSync(() => setIdleReplyOpen(true));
     draft.setRangeText(addition, draft.value.length, draft.value.length, 'end');
+    draft.dispatchEvent(new Event('input', { bubbles: true }));
     window.getSelection()?.removeAllRanges();
     draft.focus();
     draft.setSelectionRange(draft.value.length, draft.value.length);
@@ -138,7 +140,7 @@ function Thread({ thread, thinking, turnError, busy, retry, reply, refresh, onEr
     for (const message of messages.children) observer.observe(message);
     return () => observer.disconnect();
   }, [thread.messages, heroOpen]);
-  useEffect(() => { log.current.scrollTop = log.current.scrollHeight; }, [thread]);
+  useLayoutEffect(() => { log.current.scrollTop = log.current.scrollHeight; }, [thread, outgoing]);
   const [activity, setActivity] = useState(thread.active_turn);
   const [reasoning, setReasoning] = useState('');
   const [historyAvailable, setHistoryAvailable] = useState(true);
@@ -169,6 +171,8 @@ function Thread({ thread, thinking, turnError, busy, retry, reply, refresh, onEr
     } catch (error) { onError(error.message); }
     finally { setStopping(false); }
   }
+  const messages = outgoing && thread.messages.at(-1)?.id === outgoing.after
+    ? [...thread.messages, outgoing] : thread.messages;
   const pending = thread.messages.at(-1)?.author !== '@agent';
   return <section id="thread">
     <div className="thread-heading">
@@ -179,7 +183,7 @@ function Thread({ thread, thinking, turnError, busy, retry, reply, refresh, onEr
     </Hero> : <h1 className="compact-title">{caseSubtitle(thread) || caseTitle(thread)}</h1>}
     </div>
     <div className="conversation">
-    <div id="messages" ref={log} role="log" aria-label="案件對話紀錄">{thread.messages.map(m =>
+    <div id="messages" ref={log} role="log" aria-label="案件對話紀錄">{messages.map(m =>
       <div key={m.id} className={'message ' + (m.author === '@agent' ? 'agent' : 'human')}>
         <strong>{m.author === '@agent' ? '查案助理' : m.author}</strong><ThinkingText text={m.reasoning} />{m.author === '@agent' ? <div className="message-body"><Markdown text={m.body} /></div> : m.body && <p className="message-body">{m.body}</p>}
         {m.image && <img src={m.image} alt="案件附件" />}
@@ -199,7 +203,7 @@ function Thread({ thread, thinking, turnError, busy, retry, reply, refresh, onEr
       <div id="reply-content" hidden={!replyOpen}>
       {pending
       ? <button id="retry" disabled={busy || running} onClick={retry}>重新取得回覆</button>
-      : <MessageForm draftRef={replyDraft} busy={busy || running} onSend={reply} onError={onError} />}
+      : <MessageForm draftKey={draftKey} draftRef={replyDraft} busy={busy || running} onSend={reply} onError={onError} />}
       </div>
     </aside>}
   </section>;
@@ -266,6 +270,41 @@ function App() {
   }, [menuId]);
   const locked = useRef(false);
 
+  useEffect(() => {
+    if (!user) return;
+    let active = true;
+    let checking = false;
+    function expire() {
+      setMenu(null);
+      setRenaming(null);
+      setUser(null);
+      setStatus('登入已逾時，請重新登入 Gitea。');
+    }
+    async function check() {
+      if (document.hidden || checking) return;
+      checking = true;
+      try {
+        const account = await api('session-status', { cache: 'no-store' });
+        if (active && account.id !== user.id) location.reload();
+      } catch {
+        // api handles expired sessions. Retry transient network errors on the next check.
+      } finally {
+        checking = false;
+      }
+    }
+    window.addEventListener('case-login-expired', expire);
+    window.addEventListener('focus', check);
+    document.addEventListener('visibilitychange', check);
+    const timer = setInterval(check, 60000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+      window.removeEventListener('case-login-expired', expire);
+      window.removeEventListener('focus', check);
+      document.removeEventListener('visibilitychange', check);
+    };
+  }, [user]);
+
   async function act(work) {
     if (locked.current) return false;
     locked.current = true;
@@ -300,6 +339,7 @@ function App() {
     const data = await api('cases/' + id);
     if (selectedCase.current === id && version === detailVersion.current) setThread({ ...data, id });
     setCases(list => list.map(c => c.id === id ? { ...c, session_title: data.session_title } : c));
+    return data;
   }
 
   async function openCase(item, replace = false) {
@@ -322,7 +362,7 @@ function App() {
         const selected = list.find(item => item.sid === requested);
         if (!selected) throw new Error('找不到此案件，請確認分享網址。');
         await openCase(selected, true);
-      } else if (list.length) await openCase(list[0], true);
+      } else if (list.length && !readDraft(draftKeyFor(me.id, 'intake'))) await openCase(list[0], true);
     });
     const restorePage = () => location.reload();
     window.addEventListener('popstate', restorePage);
@@ -332,24 +372,32 @@ function App() {
   async function turn(id, body) {
     if (pendingTurns.current.has(id)) return false;
     pendingTurns.current.add(id);
-    setCases(list => list.map(c => c.id === id ? { ...c, running: true, turnError: '' } : c));
+    const image = body?.get('image');
+    const outgoing = body ? { id: 'outgoing', after: thread.messages.at(-1)?.id,
+      author: user.login, body: body.get('text'), image: image ? URL.createObjectURL(image) : null } : null;
+    setCases(list => list.map(c => c.id === id ? { ...c, outgoing, running: true, turnError: '' } : c));
+    let accepted = false;
     let errorMessage = '';
     try {
       await api('cases/' + id + '/turn', { method: 'POST', body });
+      accepted = true;
     } catch (error) {
       errorMessage = error.message;
       if (error.status === 401) setUser(null);
     }
     try {
-      await refreshCase(id);
+      const updated = await refreshCase(id);
+      if (outgoing && updated.messages.some(m => m.id > outgoing.after &&
+          m.author === outgoing.author && m.body === outgoing.body.trim())) accepted = true;
     } catch (error) {
       if (!errorMessage) errorMessage = error.message;
       if (error.status === 401) setUser(null);
     } finally {
+      if (outgoing?.image) URL.revokeObjectURL(outgoing.image);
       pendingTurns.current.delete(id);
-      setCases(list => list.map(c => c.id === id ? { ...c, running: false, turnError: errorMessage } : c));
+      setCases(list => list.map(c => c.id === id ? { ...c, outgoing: null, running: false, turnError: errorMessage } : c));
     }
-    return !errorMessage;
+    return accepted;
   }
 
   function createCase(data) {
@@ -505,9 +553,9 @@ function App() {
         </section>}
 
         <section id="intake" hidden={view !== 'intake'}><Hero label="查案助理" title="開始新的調查" />
-          <MessageForm sites={user.sites} programs={programs} busy={busy} onSend={createCase} onError={setStatus} />
+          <MessageForm draftKey={draftKeyFor(user.id, 'intake')} sites={user.sites} programs={programs} busy={busy} onSend={createCase} onError={setStatus} />
         </section>
-        {view === 'thread' && thread && <Thread key={thread.id} thread={thread} thinking={!!currentCase?.running} turnError={currentCase?.turnError} busy={busy}
+        {view === 'thread' && thread && <Thread outgoing={currentCase?.outgoing} draftKey={draftKeyFor(user.id, thread.sid)} key={thread.id} thread={thread} thinking={!!currentCase?.running} turnError={currentCase?.turnError} busy={busy}
           refresh={() => refreshCase(thread.id)} retry={() => turn(thread.id)} reply={data => turn(thread.id, data)} onError={setStatus} />}
         {view === 'admin' && user.admin && <section id="admin"><Hero label="管理員" title="程式索引" />
           <ProgramIndex status={status} searchRepos={searchRepos} loadSkills={loadSkills} programs={programs} busy={busy}

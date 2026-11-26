@@ -57,7 +57,12 @@ class ServiceTests(unittest.TestCase):
         for idle_hours in (2, 11):
             clock.return_value += idle_hours * 3600
             self.assertEqual(self.api("GET", "me").status_code, 200)
-        clock.return_value += 12 * 3600 + 1
+        clock.return_value += 11 * 3600
+        probe = self.api("GET", "session-status")
+        self.assertEqual(probe.json, {"id": 1})
+        self.assertNotIn("Set-Cookie", probe.headers)
+        clock.return_value += 3601
+        self.assertEqual(self.api("GET", "session-status").status_code, 401)
         self.assertEqual(self.api("GET", "me").status_code, 401)
 
     def mapping(self):

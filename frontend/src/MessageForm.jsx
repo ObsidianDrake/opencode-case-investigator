@@ -4,14 +4,31 @@ import IntakePicker from './IntakePicker';
 
 const programOrder = new Intl.Collator('en', { sensitivity: 'base' });
 
-export default function MessageForm({ programs, sites = [], busy, onSend, onError, draftRef }) {
+export function draftKeyFor(userId, scope) {
+  return JSON.stringify(['case-draft', location.pathname, userId, scope]);
+}
+
+export function readDraft(key) {
+  try { return JSON.parse(sessionStorage.getItem(key)); } catch { return null; }
+}
+
+export default function MessageForm({ draftKey, programs, sites = [], busy, onSend, onError, draftRef }) {
   const intake = programs !== undefined;
   const programNames = useMemo(
     () => (programs || []).map(program => program.name).sort(programOrder.compare),
     [programs]
   );
-  const [program, setProgram] = useState('');
-  const [site, setSite] = useState('');
+  const [initial] = useState(() => readDraft(draftKey) || {});
+  const draft = useRef({ ...initial });
+  function saveField(name, value) {
+    draft.current[name] = value;
+    try {
+      if (Object.values(draft.current).some(Boolean)) sessionStorage.setItem(draftKey, JSON.stringify(draft.current));
+      else sessionStorage.removeItem(draftKey);
+    } catch { onError('瀏覽器無法暫存草稿，請先複製文字備份。'); }
+  }
+  const [program, setProgram] = useState(initial.program || '');
+  const [site, setSite] = useState(initial.site || '');
   const [invalidField, setInvalidField] = useState('');
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState('');
@@ -60,7 +77,11 @@ export default function MessageForm({ programs, sites = [], busy, onSend, onErro
     }
     if (file) data.set('image', file, file.name || 'capture.png');
     if (await onSend(data)) {
+      draft.current = {};
+      sessionStorage.removeItem(draftKey);
       form.reset();
+      form.elements.text.value = '';
+      if (intake) form.elements.folder.value = '';
       setProgram('');
       setSite('');
       setInvalidField('');
@@ -73,18 +94,18 @@ export default function MessageForm({ programs, sites = [], busy, onSend, onErro
       <IntakePicker name="program" label="執行的程式" placeholder="輸入程式名稱搜尋"
         names={programNames} value={program} disabled={busy}
         error={invalidField === 'program' && '請從清單選擇已登錄的程式。'}
-        onChange={name => { setProgram(name); setInvalidField(''); }} />
+        onChange={name => { saveField('program', name); setProgram(name); setInvalidField(''); }} />
       {sites.length > 1 && <IntakePicker name="site" label="執行主機" placeholder="選擇或搜尋執行主機"
         names={sites} value={site} disabled={busy}
         error={invalidField === 'site' && '請從清單選擇執行主機。'}
-        onChange={name => { setSite(name); setInvalidField(''); }} />}
+        onChange={name => { saveField('site', name); setSite(name); setInvalidField(''); }} />}
       <label>程式執行位置 <small>必填</small>
-        <input name="folder" placeholder="執行目錄絕對路徑（需有群組寫入權限）" required />
+        <input name="folder" defaultValue={initial.folder || ''} disabled={busy} onInput={e => saveField('folder', e.target.value)} placeholder="執行目錄絕對路徑（需有群組寫入權限）" required />
       </label>
       <label htmlFor="description">遇到什麼狀況 <small>文字或圖片擇一</small></label>
     </>}
     <div className="draft">
-      <textarea ref={textarea} id={intake ? 'description' : undefined} name="text" required={!intake || !file} maxLength={16000}
+      <textarea defaultValue={initial.text || ''} readOnly={busy} onInput={e => saveField('text', e.target.value)} ref={textarea} id={intake ? 'description' : undefined} name="text" required={!intake || !file} maxLength={16000}
         aria-label={intake ? undefined : '補充訊息'}
         placeholder={intake ? '描述你看到的現象，或直接貼上截圖…' : '補充訊息，或直接貼上截圖…'}
         onPaste={event => {
